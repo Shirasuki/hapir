@@ -95,7 +95,7 @@ enum RunnerAction {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    match cli.command {
+    let result = match cli.command {
         Some(Commands::Claude { args }) => hapi_cli::run_cli(args).await,
         Some(Commands::Codex { args }) => {
             let parsed = hapi_cli::commands::codex::CodexArgs::parse_from(args);
@@ -145,5 +145,10 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Doctor) => hapi_cli::commands::doctor::run(),
         // No subcommand: default to claude with any trailing args
         None => hapi_cli::run_cli(cli.args).await,
+    };
+
+    if let Err(e) = result {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
     }
 }
