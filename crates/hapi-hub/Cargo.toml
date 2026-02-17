@@ -20,7 +20,7 @@ axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
-jsonwebtoken = "10.3.0"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 hmac = "0.12"
 sha2 = "0.10"
 subtle = "2"

@@ -44,14 +44,17 @@ pub fn build_router(state: AppState) -> Router {
         axum::middleware::from_fn_with_state(state.clone(), middleware::cli_auth::cli_auth),
     );
 
-    let api_routes = routes::api_router().route_layer(
-        axum::middleware::from_fn_with_state(state.clone(), middleware::auth::jwt_auth),
-    );
+    // Mount API routes under /api without nest, so middleware sees full paths.
+    let api_routes = routes::api_router();
 
     Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
         .nest("/cli", cli_routes)
         .nest("/api", api_routes)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::auth::jwt_auth,
+        ))
         .layer(cors)
         .with_state(state)
 }

@@ -30,7 +30,9 @@ pub async fn jwt_auth(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let path = req.uri().path();
-    if path == "/api/auth" || path == "/api/bind" {
+
+    // Skip JWT auth for non-API routes and public API endpoints
+    if !path.starts_with("/api/") || path == "/api/auth" || path == "/api/bind" {
         return Ok(next.run(req).await);
     }
 
