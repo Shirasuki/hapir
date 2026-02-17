@@ -226,22 +226,28 @@ async fn handle_cli_ws(
         let event = match parsed.get("event").and_then(|v| v.as_str()) {
             Some(e) => e.to_string(),
             None => {
-                // Might be an RPC response (ack)
+                // No event field — treat as generic ack if it has an id
                 if let Some(id) = parsed.get("id").and_then(|v| v.as_str()) {
-                    if let Some(event_str) = parsed.get("event").and_then(|v| v.as_str()) {
-                        if event_str.ends_with(":ack") {
-                            let result_val = parsed.get("data").cloned().unwrap_or(Value::Null);
-                            state.conn_mgr.handle_rpc_response(id, Ok(result_val)).await;
-                            continue;
-                        }
-                    }
-                    // Generic ack
                     let result_val = parsed.get("data").cloned().unwrap_or(Value::Null);
                     state.conn_mgr.handle_rpc_response(id, Ok(result_val)).await;
                 }
                 continue;
             }
         };
+
+        // Handle RPC ack/response at transport level before dispatching to event handler
+        if event.ends_with(":ack") || event == "rpc-response" {
+            if let Some(id) = parsed.get("id").and_then(|v| v.as_str()) {
+                let result_val = parsed.get("data").cloned().unwrap_or(Value::Null);
+                let error = result_val.get("error").and_then(|v| v.as_str()).map(String::from);
+                if let Some(err) = error {
+                    state.conn_mgr.handle_rpc_response(id, Err(err)).await;
+                } else {
+                    state.conn_mgr.handle_rpc_response(id, Ok(result_val)).await;
+                }
+            }
+            continue;
+        }
 
         let data = parsed.get("data").cloned().unwrap_or(Value::Null);
         let request_id = parsed.get("id").and_then(|v| v.as_str()).map(String::from);

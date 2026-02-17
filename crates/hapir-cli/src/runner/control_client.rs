@@ -16,6 +16,13 @@ fn http_timeout() -> std::time::Duration {
     std::time::Duration::from_millis(ms)
 }
 
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(http_timeout())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 /// Check if the runner is alive by reading state and pinging.
 /// Returns the control server port if alive.
 pub async fn check_runner_alive(
@@ -34,10 +41,7 @@ pub async fn check_runner_alive(
     }
 
     // Try to ping the control server
-    let client = reqwest::Client::builder()
-        .timeout(http_timeout())
-        .build()
-        .ok()?;
+    let client = http_client();
 
     match client
         .post(format!("http://127.0.0.1:{port}/list"))
@@ -51,7 +55,7 @@ pub async fn check_runner_alive(
 
 /// List sessions from the runner
 pub async fn list_sessions(port: u16) -> Result<Vec<ListSessionEntry>> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/list"))
         .send()
@@ -67,7 +71,7 @@ pub async fn list_sessions(port: u16) -> Result<Vec<ListSessionEntry>> {
 
 /// Stop a specific session
 pub async fn stop_session(port: u16, session_id: &str) -> Result<()> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/stop-session"))
         .json(&StopSessionRequest {
@@ -88,7 +92,7 @@ pub async fn spawn_session(
     port: u16,
     req: &SpawnSessionRequest,
 ) -> Result<serde_json::Value> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/spawn-session"))
         .json(req)
@@ -108,7 +112,7 @@ pub async fn spawn_session(
 
 /// Request runner shutdown (fire-and-forget HTTP request)
 pub async fn stop_runner(port: u16) -> Result<()> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let _ = client
         .post(format!("http://127.0.0.1:{port}/stop"))
         .send()
@@ -189,7 +193,7 @@ pub async fn notify_session_started(
     session_id: &str,
     metadata: Option<serde_json::Value>,
 ) -> Result<()> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/session-started"))
         .json(&SessionStartedPayload {

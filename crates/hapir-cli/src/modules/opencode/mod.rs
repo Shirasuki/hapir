@@ -170,7 +170,7 @@ async fn opencode_remote_launcher(
 /// Bootstraps the session, creates the message queue, and enters the
 /// main local/remote loop. Unlike Claude, there is no hook server or
 /// session wrapper — the AgentSessionBase is used directly.
-pub async fn run(working_directory: &str) -> anyhow::Result<()> {
+pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::Result<()> {
     debug!("[runOpenCode] Starting in {}", working_directory);
 
     // 1. Bootstrap session
@@ -199,6 +199,20 @@ pub async fn run(working_directory: &str) -> anyhow::Result<()> {
         .to_string();
 
     debug!("[runOpenCode] Session bootstrapped: {}", session_id);
+
+    // Notify runner that this session has started
+    if let Some(port) = runner_port {
+        let pid = std::process::id();
+        if let Err(e) = crate::runner::control_client::notify_session_started(
+            port,
+            &session_id,
+            Some(serde_json::json!({ "hostPid": pid })),
+        )
+        .await
+        {
+            tracing::warn!("[runOpenCode] Failed to notify runner of session start: {e}");
+        }
+    }
 
     // 2. Create RunnerLifecycle
     let lifecycle = RunnerLifecycle::new(RunnerLifecycleOptions {

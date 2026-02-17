@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
 use axum::{
-    extract::{Extension, Path, State},
-    http::StatusCode,
+    extract::{Extension, Path, State}, http::StatusCode,
     routing::{get, post},
-    Json, Router,
+    Json,
+    Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -77,8 +77,8 @@ async fn spawn_machine(
         );
     }
 
-    let agent = body.agent.as_deref().unwrap_or("claude");
-    if !matches!(agent, "claude" | "codex" | "gemini" | "opencode") {
+    let agent = body.agent.as_deref().unwrap_or("claude").to_lowercase();
+    if !matches!(agent.as_str(), "claude" | "codex" | "gemini" | "opencode") {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "Invalid agent"})),
@@ -97,7 +97,7 @@ async fn spawn_machine(
         .spawn_session(
             &machine_id,
             &body.directory,
-            agent,
+            &agent,
             body.model.as_deref(),
             body.yolo,
             body.session_type.as_deref(),
@@ -108,13 +108,11 @@ async fn spawn_machine(
 
     match result {
         Ok(spawn_result) => {
-            let val = serde_json::to_value(&spawn_result).unwrap_or_else(|_| json!({"type": "error"}));
+            let val =
+                serde_json::to_value(&spawn_result).unwrap_or_else(|_| json!({"type": "error"}));
             (StatusCode::OK, Json(val))
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e})),
-        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
     }
 }
 

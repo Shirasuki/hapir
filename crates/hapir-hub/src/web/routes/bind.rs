@@ -21,11 +21,12 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/bind", post(bind_handler))
 }
 
+/// Bind a Telegram account to a CLI namespace, enabling Telegram-based login and notifications.
 async fn bind_handler(
     State(state): State<AppState>,
     Json(body): Json<BindBody>,
 ) -> (StatusCode, Json<Value>) {
-    // 1. Check that Telegram bot token is configured.
+    // Check that Telegram bot token is configured.
     let bot_token = match &state.telegram_bot_token {
         Some(t) => t.clone(),
         None => {
@@ -111,7 +112,7 @@ async fn bind_handler(
     // 8. Issue JWT (HS256, 15 minute expiry).
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
 
     let claims = JwtClaims {

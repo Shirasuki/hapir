@@ -25,7 +25,7 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
     };
 
     // Full init: token, machine, runner
-    let _runner_port = match common::full_init(&mut config).await {
+    let runner_port = match common::full_init(&mut config).await {
         Ok(port) => port,
         Err(e) => {
             let msg = e.to_string();
@@ -53,6 +53,7 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
             Some(args.passthrough_args)
         },
         started_by: args.started_by,
+        runner_port,
     };
 
     run_claude(options).await

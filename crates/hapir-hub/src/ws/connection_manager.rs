@@ -59,21 +59,7 @@ impl ConnectionManager {
 
     pub async fn add_connection(&self, conn: WsConnection) {
         let id = conn.id.clone();
-        let session_id = conn.session_id.clone();
-        let machine_id = conn.machine_id.clone();
-        self.connections.write().await.insert(id.clone(), conn);
-        if let Some(sid) = session_id {
-            self.session_rooms.write().await
-                .entry(sid)
-                .or_default()
-                .push(id.clone());
-        }
-        if let Some(mid) = machine_id {
-            self.machine_rooms.write().await
-                .entry(mid)
-                .or_default()
-                .push(id.clone());
-        }
+        self.connections.write().await.insert(id, conn);
     }
 
     pub async fn remove_connection(&self, conn_id: &str) {

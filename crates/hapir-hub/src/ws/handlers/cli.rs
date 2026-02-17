@@ -10,8 +10,6 @@ use crate::sync::todos::extract_todos_from_message_content;
 use super::super::connection_manager::ConnectionManager;
 use super::super::terminal_registry::TerminalRegistry;
 
-// ---------- Access resolution (mirrors TS resolveSessionAccess / resolveMachineAccess) ----------
-
 enum AccessError {
     NamespaceMissing,
     AccessDenied,
@@ -107,19 +105,11 @@ pub async fn handle_cli_event(
             }
             None
         }
-        "rpc-response" => {
-            // This is an ack to an RPC request we sent
-            if let Some(rid) = data.get("id").and_then(|v| v.as_str()) {
-                let result_val = data.get("result").cloned().unwrap_or(Value::Null);
-                let error = data.get("error").and_then(|v| v.as_str()).map(String::from);
-                if let Some(err) = error {
-                    conn_mgr.handle_rpc_response(rid, Err(err)).await;
-                } else {
-                    conn_mgr.handle_rpc_response(rid, Ok(result_val)).await;
-                }
-            }
-            None
-        }
+        // "rpc-response" and "rpc-request:ack" are now handled at the transport
+        // layer in ws/mod.rs before reaching this handler.
+        // "rpc-response" and "rpc-request:ack" are now handled at the transport
+        // layer in ws/mod.rs before reaching this handler.
+        "rpc-response" | "rpc-request:ack" => None,
         "terminal:ready" | "terminal:output" => {
             forward_terminal_event(conn_id, event, &data, conn_mgr, terminal_registry, true).await;
             None

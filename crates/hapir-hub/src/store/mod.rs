@@ -77,13 +77,13 @@ impl Store {
     }
 
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap()
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn configure_pragmas(&self) -> Result<()> {
         self.conn
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .execute_batch(
                 "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -100,7 +100,7 @@ impl Store {
         let version: i64 = self
             .conn
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .context("failed to read schema version")?;
         Ok(version)
@@ -109,7 +109,7 @@ impl Store {
     fn set_schema_version(&self, version: i64) -> Result<()> {
         self.conn
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .pragma_update(None, "user_version", version)
             .context("failed to set schema version")?;
         Ok(())
@@ -140,7 +140,7 @@ impl Store {
     }
 
     fn assert_required_tables(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1")
             .context("failed to prepare table check query")?;
@@ -165,7 +165,7 @@ impl Store {
     fn create_tables(&self) -> Result<()> {
         self.conn
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
@@ -215,7 +215,7 @@ impl Store {
             )
             .context("failed to create tables (part 1)")?;
 
-        self.conn.lock().unwrap().execute_batch(
+        self.conn.lock().unwrap_or_else(|e| e.into_inner()).execute_batch(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_local_id
                 ON messages(session_id, local_id) WHERE local_id IS NOT NULL;
 

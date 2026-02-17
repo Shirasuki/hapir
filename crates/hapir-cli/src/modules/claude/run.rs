@@ -31,6 +31,7 @@ pub struct StartOptions {
     pub claude_env_vars: Option<HashMap<String, String>>,
     pub claude_args: Option<Vec<String>>,
     pub started_by: Option<String>,
+    pub runner_port: Option<u16>,
 }
 
 /// The enhanced mode type for Claude sessions.
@@ -144,6 +145,20 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
         .to_string();
 
     debug!("[runClaude] Session bootstrapped: {}", session_id);
+
+    // Notify runner that this session has started (resolves the spawn awaiter)
+    if let Some(port) = options.runner_port {
+        let pid = std::process::id();
+        if let Err(e) = crate::runner::control_client::notify_session_started(
+            port,
+            &session_id,
+            Some(serde_json::json!({ "hostPid": pid })),
+        )
+        .await
+        {
+            warn!("[runClaude] Failed to notify runner of session start: {e}");
+        }
+    }
 
     // 2. Start hook server for receiving Claude session notifications
     let ws_for_hook = ws_client.clone();

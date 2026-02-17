@@ -1,15 +1,16 @@
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::{delete, get, patch, post},
-    Extension, Json, Router,
+    extract::{Path, State}, http::StatusCode, routing::{delete, get, patch, post},
+    Extension,
+    Json,
+    Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::cmp::Ordering;
 
 use hapir_shared::modes::{
-    is_model_mode_allowed_for_flavor, is_permission_mode_allowed_for_flavor,
-    permission_modes_for_flavor, AgentFlavor, ModelMode, PermissionMode,
+    is_model_mode_allowed_for_flavor, is_permission_mode_allowed_for_flavor, permission_modes_for_flavor, AgentFlavor,
+    ModelMode, PermissionMode,
 };
 use hapir_shared::session_summary::to_session_summary;
 
@@ -52,8 +53,6 @@ fn parse_flavor(session: &hapir_shared::schemas::Session) -> Option<AgentFlavor>
         .and_then(|f| serde_json::from_value(Value::String(f.to_string())).ok())
 }
 
-// ---------- handlers ----------
-
 async fn list_sessions(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
@@ -65,9 +64,9 @@ async fn list_sessions(
         // Active sessions first
         if a.active != b.active {
             return if a.active {
-                std::cmp::Ordering::Less
+                Ordering::Less
             } else {
-                std::cmp::Ordering::Greater
+                Ordering::Greater
             };
         }
         // Within active sessions, sort by pending requests count descending
@@ -81,7 +80,7 @@ async fn list_sessions(
         // Then by updatedAt descending
         b.updated_at
             .partial_cmp(&a.updated_at)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .unwrap_or(Ordering::Equal)
     });
 
     let summaries: Vec<_> = sessions.iter().map(to_session_summary).collect();
@@ -120,13 +119,13 @@ async fn delete_session(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -170,7 +169,7 @@ async fn update_session(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "Invalid body: name is required" })),
-            )
+            );
         }
     };
 
@@ -189,13 +188,13 @@ async fn update_session(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -256,10 +255,7 @@ async fn resume_session(
                 ResumeSessionErrorCode::ResumeUnavailable => "resume_unavailable",
                 ResumeSessionErrorCode::ResumeFailed => "resume_failed",
             };
-            (
-                status,
-                Json(json!({ "error": message, "code": code_str })),
-            )
+            (status, Json(json!({ "error": message, "code": code_str })))
         }
     }
 }
@@ -277,13 +273,13 @@ async fn archive_session(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -316,13 +312,13 @@ async fn abort_session(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -361,13 +357,13 @@ async fn switch_session(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -408,7 +404,7 @@ async fn set_permission_mode(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "Invalid body" })),
-            )
+            );
         }
     };
 
@@ -420,13 +416,13 @@ async fn set_permission_mode(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -459,7 +455,10 @@ async fn set_permission_mode(
         .await
     {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": e.to_string() }))),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": e.to_string() })),
+        ),
     }
 }
 
@@ -480,7 +479,7 @@ async fn set_model(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "Invalid body" })),
-            )
+            );
         }
     };
 
@@ -492,13 +491,13 @@ async fn set_model(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -523,7 +522,10 @@ async fn set_model(
         .await
     {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": e.to_string() }))),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": e.to_string() })),
+        ),
     }
 }
 
@@ -542,13 +544,13 @@ async fn list_slash_commands(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -581,13 +583,13 @@ async fn list_skills(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -640,11 +642,15 @@ async fn upload_file(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "Invalid body" })),
-            )
+            );
         }
     };
 
-    if body.filename.is_empty() || body.filename.len() > 255 || body.content.is_empty() || body.mime_type.is_empty() {
+    if body.filename.is_empty()
+        || body.filename.len() > 255
+        || body.content.is_empty()
+        || body.mime_type.is_empty()
+    {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "Invalid body" })),
@@ -666,13 +672,13 @@ async fn upload_file(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 
@@ -683,7 +689,10 @@ async fn upload_file(
         );
     }
 
-    match engine.upload_file(&session_id, &body.filename, &body.content, &body.mime_type).await {
+    match engine
+        .upload_file(&session_id, &body.filename, &body.content, &body.mime_type)
+        .await
+    {
         Ok(resp) => {
             let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({ "success": false }));
             (StatusCode::OK, Json(val))
@@ -712,7 +721,7 @@ async fn delete_upload_file(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "Invalid body" })),
-            )
+            );
         }
     };
 
@@ -731,13 +740,13 @@ async fn delete_upload_file(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Session access denied" })),
-            )
+            );
         }
         Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Session not found" })),
-            )
+            );
         }
     };
 

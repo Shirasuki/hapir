@@ -370,6 +370,8 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
         }
     }
 
+    let mut codex_temp_dir: Option<std::path::PathBuf> = None;
+
     if let Some(ref token) = req.token {
         if agent_cmd == "codex" {
             // Create temp dir with auth.json for Codex
@@ -378,6 +380,7 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
                 let auth_path = codex_dir.join("auth.json");
                 if std::fs::write(&auth_path, token).is_ok() {
                     cmd.env("CODEX_HOME", &codex_dir);
+                    codex_temp_dir = Some(codex_dir);
                 }
             }
         } else if agent_cmd == "claude" {
@@ -393,6 +396,10 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
         cmd.env("HAPI_WORKTREE_PATH", &wt.worktree_path);
         cmd.env("HAPI_WORKTREE_CREATED_AT", wt.created_at.to_string());
     }
+
+    // Pre-register awaiter BEFORE spawning so the webhook can't arrive before we're ready.
+    // We use a placeholder PID (0) and update it after spawn.
+    let (awaiter_tx, awaiter_rx) = tokio::sync::oneshot::channel::<TrackedSession>();
 
     let result = cmd.spawn();
 
@@ -413,6 +420,14 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
             };
 
             info!(pid = pid, session_id = %session_id, "spawned session process");
+
+            // Register awaiter with real PID immediately so webhook can resolve it
+            {
+                let mut awaiters = state.pid_to_awaiter.lock().await;
+                awaiters.insert(pid, Box::new(move |session| {
+                    let _ = awaiter_tx.send(session);
+                }));
+            }
 
             let dir_msg = if directory_created {
                 Some(format!("The path '{}' did not exist. We created a new folder and spawned a new session there.", req.directory))
@@ -442,6 +457,7 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
             // Spawn a background task to capture stderr and handle child exit
             let state_clone = state.clone();
             let sid = session_id.clone();
+            let codex_temp_dir_clone = codex_temp_dir.clone();
             tokio::spawn(async move {
                 // Capture stderr (last 4000 chars)
                 let stderr = child.stderr.take();
@@ -504,18 +520,14 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
                 state_clone.sessions.lock().await.remove(&sid);
                 // Remove awaiter if still pending
                 state_clone.pid_to_awaiter.lock().await.remove(&pid);
+                // Clean up codex temp directory
+                if let Some(ref dir) = codex_temp_dir_clone {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
             });
 
             // Wait for session webhook (up to 15 seconds)
-            let (tx, rx) = tokio::sync::oneshot::channel::<TrackedSession>();
-            {
-                let mut awaiters = state.pid_to_awaiter.lock().await;
-                awaiters.insert(pid, Box::new(move |session| {
-                    let _ = tx.send(session);
-                }));
-            }
-
-            match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(15), awaiter_rx).await {
                 Ok(Ok(completed_session)) => {
                     info!(session_id = %session_id, "session fully spawned with webhook");
                     SpawnSessionResponse {

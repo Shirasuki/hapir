@@ -13,14 +13,17 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/auth", post(auth_handler))
 }
 
+/// Authenticate via CLI access token or Telegram initData and issue a short-lived JWT.
 async fn auth_handler(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
-    let has_init_data = body.get("initData").and_then(|v| v.as_str()).is_some();
-    let has_access_token = body.get("accessToken").and_then(|v| v.as_str()).is_some();
+    // 为Telegram Web App提供的initData参数认证
+    let init_data = body.get("initData").and_then(|v| v.as_str());
+    // 为CLI提供的accessToken参数认证
+    let access_token = body.get("accessToken").and_then(|v| v.as_str());
 
-    if !has_init_data && !has_access_token {
+    if !init_data.is_some() && !access_token.is_some() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "Invalid body"})),
@@ -32,9 +35,7 @@ async fn auth_handler(
     let mut first_name: Option<String> = None;
     let mut last_name: Option<String> = None;
 
-    if has_access_token {
-        // CLI access token authentication
-        let token_str = body["accessToken"].as_str().unwrap();
+    if let Some(token_str) = access_token {
         let parsed = match parse_access_token(token_str) {
             Some(p) => p,
             None => {
@@ -54,27 +55,25 @@ async fn auth_handler(
 
         first_name = Some("Web User".to_string());
         namespace = parsed.namespace;
-    } else {
+    } else if let Some(init_data) = init_data {
         // Telegram initData authentication
         let bot_token = match &state.telegram_bot_token {
             Some(t) => t.clone(),
             None => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"error": "Telegram authentication is disabled. Configure TELEGRAM_BOT_TOKEN."})),
+                    Json(
+                        json!({"error": "Telegram authentication is disabled. Configure TELEGRAM_BOT_TOKEN."}),
+                    ),
                 );
             }
         };
 
-        let init_data = body["initData"].as_str().unwrap();
         let result = validate_telegram_init_data(init_data, &bot_token, 300);
         let tg_user = match result {
             TelegramInitDataValidation::Ok { user, .. } => user,
             TelegramInitDataValidation::Err(e) => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": e})),
-                );
+                return (StatusCode::UNAUTHORIZED, Json(json!({"error": e})));
             }
         };
 
@@ -97,14 +96,27 @@ async fn auth_handler(
         first_name = tg_user.first_name;
         last_name = tg_user.last_name;
         namespace = stored_user.namespace;
+    } else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Invalid body"})),
+        );
     }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
 
-    let owner_id = get_or_create_owner_id(&state.data_dir).unwrap_or(0);
+    let owner_id = match get_or_create_owner_id(&state.data_dir) {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Failed to get owner ID: {e}")})),
+            );
+        }
+    };
 
     let claims = JwtClaims {
         uid: owner_id,

@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use axum::http::HeaderValue;
 use serde_json::json;
 use subtle::ConstantTimeEq;
 
@@ -75,7 +76,7 @@ pub async fn cli_auth(
     let mut response = next.run(req).await;
     response.headers_mut().insert(
         "X-Hapi-Protocol-Version",
-        axum::http::HeaderValue::from_str(&PROTOCOL_VERSION.to_string()).unwrap(),
+        HeaderValue::from_str(&PROTOCOL_VERSION.to_string()).unwrap(),
     );
     Ok(response)
 }

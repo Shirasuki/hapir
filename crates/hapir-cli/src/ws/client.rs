@@ -354,9 +354,14 @@ impl WsClient {
                                             let method = ws_msg.data.get("method")
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or("");
-                                            let params = ws_msg.data.get("params")
+                                            let params_raw = ws_msg.data.get("params")
                                                 .cloned()
                                                 .unwrap_or(Value::Null);
+                                            // Hub sends params as a JSON-encoded string; parse it back
+                                            let params = match params_raw {
+                                                Value::String(ref s) => serde_json::from_str(s).unwrap_or(params_raw),
+                                                other => other,
+                                            };
 
                                             if let Some(handler) = read_rpcs.read().await.get(method).cloned() {
                                                 let id = id.clone();
@@ -404,6 +409,7 @@ impl WsClient {
                     _ = shutdown.notified() => {
                         *state.write().await = ConnectionState::Disconnected;
                         *tx_holder.lock().await = None;
+                        pending_acks.lock().await.clear();
                         return;
                     }
                 }

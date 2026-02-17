@@ -7,8 +7,10 @@ pub mod web;
 pub mod ws;
 
 use std::sync::Arc;
-
-use tokio::sync::{Mutex, RwLock};
+use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio::signal::unix::SignalKind;
+use tokio::sync::{Mutex, Notify, RwLock};
 use tracing::info;
 
 use config::Configuration;
@@ -90,17 +92,19 @@ pub async fn run_hub() -> anyhow::Result<()> {
     // Start periodic expiration timer
     let sync_for_expire = sync_engine.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
         loop {
             interval.tick().await;
+            // 定时清理过期的机器和终端会话
             sync_for_expire.lock().await.expire_inactive();
         }
     });
 
     // Start terminal idle timeout checker
+    // 每60秒检查一次空闲的终端，如果超过15分钟未使用则关闭，并通知相关WebSocket连接
     let conn_mgr_for_idle = conn_mgr.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
             let idle_ids = terminal_registry_for_idle.read().await.collect_idle();
@@ -141,7 +145,7 @@ pub async fn run_hub() -> anyhow::Result<()> {
     // Start SSE heartbeat timer (lazy: only sends when connections exist)
     let sync_for_heartbeat = sync_engine.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
             let mut engine = sync_for_heartbeat.lock().await;
@@ -158,7 +162,7 @@ pub async fn run_hub() -> anyhow::Result<()> {
 
     // Bind and serve
     let addr = format!("{}:{}", config.listen_host, config.listen_port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = TcpListener::bind(&addr).await?;
     info!(addr = %addr, "listening");
 
     // Start Telegram bot (after HTTP server is ready)
@@ -169,7 +173,7 @@ pub async fn run_hub() -> anyhow::Result<()> {
     info!(url = %config.public_url, "hub ready");
 
     // Use a Notify so we can trigger graceful shutdown from outside
-    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown_notify = Arc::new(Notify::new());
     let shutdown_notify_srv = shutdown_notify.clone();
 
     let server_task = tokio::spawn(async move {
@@ -191,7 +195,7 @@ pub async fn run_hub() -> anyhow::Result<()> {
     shutdown_notify.notify_one();
 
     // Give axum up to 5s to finish, then force abort
-    if tokio::time::timeout(std::time::Duration::from_secs(5), server_task)
+    if tokio::time::timeout(Duration::from_secs(5), server_task)
         .await
         .is_err()
     {
@@ -216,7 +220,7 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        tokio::signal::unix::signal(SignalKind::terminate())
             .expect("failed to install SIGTERM handler")
             .recv()
             .await;

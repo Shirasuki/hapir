@@ -55,7 +55,7 @@ fn resolve_starting_mode(mode_str: Option<&str>, started_by: SharedStartedBy) ->
 /// Bootstraps the session, creates the message queue, and enters the
 /// main local/remote loop. Simpler than Claude: no hook server, no
 /// wrapper session type -- uses AgentSessionBase directly.
-pub async fn run(working_directory: &str) -> anyhow::Result<()> {
+pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::Result<()> {
     let working_directory = working_directory.to_string();
     let started_by = SharedStartedBy::Terminal;
     let starting_mode = resolve_starting_mode(None, started_by);
@@ -90,6 +90,20 @@ pub async fn run(working_directory: &str) -> anyhow::Result<()> {
         .to_string();
 
     debug!("[runGemini] Session bootstrapped: {}", session_id);
+
+    // Notify runner that this session has started
+    if let Some(port) = runner_port {
+        let pid = std::process::id();
+        if let Err(e) = crate::runner::control_client::notify_session_started(
+            port,
+            &session_id,
+            Some(serde_json::json!({ "hostPid": pid })),
+        )
+        .await
+        {
+            tracing::warn!("[runGemini] Failed to notify runner of session start: {e}");
+        }
+    }
 
     // 2. Create RunnerLifecycle and register signal handlers
     let lifecycle = RunnerLifecycle::new(RunnerLifecycleOptions {

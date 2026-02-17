@@ -31,11 +31,11 @@ pub async fn run(args: GeminiArgs) -> Result<()> {
     debug!(?args, "gemini command starting");
 
     let mut config = Configuration::create()?;
-    let _runner_port = common::full_init(&mut config).await?;
+    let runner_port = common::full_init(&mut config).await?;
 
     let working_directory = std::env::current_dir()?
         .to_string_lossy()
         .to_string();
 
-    crate::modules::gemini::run(&working_directory).await
+    crate::modules::gemini::run(&working_directory, runner_port).await
 }

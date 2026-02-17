@@ -14,7 +14,7 @@ const MACHINE_TIMEOUT_MS: i64 = 45_000;
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 

@@ -17,7 +17,7 @@ const SESSION_TIMEOUT_MS: i64 = 30_000;
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -113,6 +113,8 @@ impl SessionCache {
             Some(s) => s,
             None => {
                 if self.sessions.remove(session_id).is_some() {
+                    self.last_broadcast_at.remove(session_id);
+                    self.todo_backfill_attempted.remove(session_id);
                     publisher.emit(SyncEvent::SessionRemoved {
                         session_id: session_id.to_string(),
                         namespace: None,

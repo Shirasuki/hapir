@@ -5,7 +5,7 @@ pub mod telegram_init_data;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-
+use axum::http::HeaderValue;
 use axum::Router;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
@@ -36,7 +36,7 @@ pub fn build_router(state: AppState) -> Router {
     let allow_origin = if cors_origins.iter().any(|o| o == "*") {
         AllowOrigin::any()
     } else {
-        let origins: Vec<axum::http::HeaderValue> = cors_origins
+        let origins: Vec<HeaderValue> = cors_origins
             .iter()
             .filter_map(|o| o.parse().ok())
             .collect();
@@ -47,6 +47,7 @@ pub fn build_router(state: AppState) -> Router {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
+            axum::http::Method::PATCH,
             axum::http::Method::DELETE,
             axum::http::Method::OPTIONS,
         ])
