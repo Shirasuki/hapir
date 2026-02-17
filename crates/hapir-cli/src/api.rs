@@ -6,7 +6,7 @@ use hapir_shared::schemas::{Metadata, Session};
 
 use crate::config::Configuration;
 
-/// HTTP API client for the HAPI hub.
+/// HTTP API client for the HAPIR hub.
 pub struct ApiClient {
     http: reqwest::Client,
     base_url: String,
@@ -26,7 +26,7 @@ struct MachineResponse {
 impl ApiClient {
     pub fn new(config: &Configuration) -> Result<Self> {
         if config.cli_api_token.is_empty() {
-            bail!("CLI_API_TOKEN is required. Run 'hapi auth login' or set the CLI_API_TOKEN environment variable.");
+            bail!("CLI_API_TOKEN is required. Run 'hapir auth login' or set the CLI_API_TOKEN environment variable.");
         }
         Ok(Self {
             http: reqwest::Client::builder()

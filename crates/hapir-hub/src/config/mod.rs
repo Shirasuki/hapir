@@ -51,7 +51,7 @@ impl Configuration {
         };
         std::fs::create_dir_all(&data_dir)?;
 
-        // Resolve database path: DB_PATH env or {data_dir}/hapi.db
+        // Resolve database path: DB_PATH env or {data_dir}/hapir.db
         let db_path = if let Ok(p) = std::env::var("DB_PATH") {
             PathBuf::from(p)
         } else {

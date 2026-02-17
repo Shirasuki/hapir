@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 pub const ELEVENLABS_API_BASE: &str = "https://api.elevenlabs.io/v1";
-pub const VOICE_AGENT_NAME: &str = "Hapi Voice Assistant";
-pub const VOICE_FIRST_MESSAGE: &str = "Hey! Hapi here.";
+pub const VOICE_AGENT_NAME: &str = "Hapir Voice Assistant";
+pub const VOICE_FIRST_MESSAGE: &str = "Hey! Hapir here.";
 
 pub const VOICE_SYSTEM_PROMPT: &str = include_str!("voice_prompt.txt");
 
@@ -172,7 +172,7 @@ mod tests {
     fn voice_config_serializes() {
         let config = build_voice_agent_config();
         let json = serde_json::to_string(&config).unwrap();
-        assert!(json.contains("Hapi Voice Assistant"));
+        assert!(json.contains("Hapir Voice Assistant"));
         assert!(json.contains("gemini-2.5-flash"));
     }
 }

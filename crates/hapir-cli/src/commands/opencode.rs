@@ -15,7 +15,7 @@ pub struct OpencodeArgs {
 
     /// Starting mode for the session
     #[arg(long)]
-    pub hapi_starting_mode: Option<String>,
+    pub hapir_starting_mode: Option<String>,
 
     /// Bypass permission prompts
     #[arg(long)]

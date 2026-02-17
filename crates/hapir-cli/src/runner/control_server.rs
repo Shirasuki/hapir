@@ -79,13 +79,10 @@ async fn list_sessions(
     })
 }
 
-async fn stop_session(
-    State(state): State<RunnerState>,
-    Json(req): Json<StopSessionRequest>,
-) -> (StatusCode, Json<Value>) {
+/// Stop a session by ID. Shared logic used by both HTTP handler and RPC.
+pub async fn do_stop_session(state: &RunnerState, session_id: &str) -> Value {
     let mut sessions = state.sessions.lock().await;
-    if let Some(session) = sessions.remove(&req.session_id) {
-        // Kill process if we have a PID
+    if let Some(session) = sessions.remove(session_id) {
         if let Some(pid) = session.pid {
             #[cfg(unix)]
             {
@@ -93,34 +90,38 @@ async fn stop_session(
             }
             let _ = pid;
         }
-        info!(session_id = %req.session_id, "session stopped");
-        (StatusCode::OK, Json(json!({"success": true})))
+        info!(session_id = %session_id, "session stopped");
+        json!({"success": true})
     } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "error": "session not found"})),
-        )
+        json!({"success": false, "error": "session not found"})
     }
 }
 
-async fn spawn_session(
+async fn stop_session(
     State(state): State<RunnerState>,
-    Json(req): Json<SpawnSessionRequest>,
-) -> (StatusCode, Json<SpawnSessionResponse>) {
-    // Check if directory exists
+    Json(req): Json<StopSessionRequest>,
+) -> (StatusCode, Json<Value>) {
+    let result = do_stop_session(&state, &req.session_id).await;
+    let status = if result.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    };
+    (status, Json(result))
+}
+
+/// Spawn a session process. Shared logic used by both HTTP handler and RPC.
+pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> SpawnSessionResponse {
     let dir = std::path::Path::new(&req.directory);
     if !dir.exists() {
-        return (
-            StatusCode::OK,
-            Json(SpawnSessionResponse {
-                success: false,
-                session_id: None,
-                error: None,
-                requires_user_approval: Some(true),
-                action_required: Some("CREATE_DIRECTORY".to_string()),
-                directory: Some(req.directory),
-            }),
-        );
+        return SpawnSessionResponse {
+            success: false,
+            session_id: None,
+            error: None,
+            requires_user_approval: Some(true),
+            action_required: Some("CREATE_DIRECTORY".to_string()),
+            directory: Some(req.directory),
+        };
     }
 
     let session_id = req
@@ -129,7 +130,6 @@ async fn spawn_session(
 
     let flavor = req.flavor.as_deref().unwrap_or("claude");
 
-    // Map flavor to the CLI subcommand name
     let agent_cmd = match flavor {
         "codex" => "codex",
         "gemini" => "gemini",
@@ -141,17 +141,14 @@ async fn spawn_session(
         Ok(p) => p,
         Err(e) => {
             warn!(error = %e, "failed to determine current executable");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(SpawnSessionResponse {
-                    success: false,
-                    session_id: None,
-                    error: Some(format!("failed to get current exe: {e}")),
-                    requires_user_approval: None,
-                    action_required: None,
-                    directory: None,
-                }),
-            );
+            return SpawnSessionResponse {
+                success: false,
+                session_id: None,
+                error: Some(format!("failed to get current exe: {e}")),
+                requires_user_approval: None,
+                action_required: None,
+                directory: None,
+            };
         }
     };
 
@@ -190,39 +187,54 @@ async fn spawn_session(
                     metadata: None,
                 },
             );
-            (
-                StatusCode::OK,
-                Json(SpawnSessionResponse {
-                    success: true,
-                    session_id: Some(session_id),
-                    error: None,
-                    requires_user_approval: None,
-                    action_required: None,
-                    directory: None,
-                }),
-            )
+            SpawnSessionResponse {
+                success: true,
+                session_id: Some(session_id),
+                error: None,
+                requires_user_approval: None,
+                action_required: None,
+                directory: None,
+            }
         }
         Err(e) => {
             warn!(error = %e, "failed to spawn session process");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(SpawnSessionResponse {
-                    success: false,
-                    session_id: None,
-                    error: Some(format!("failed to spawn process: {e}")),
-                    requires_user_approval: None,
-                    action_required: None,
-                    directory: None,
-                }),
-            )
+            SpawnSessionResponse {
+                success: false,
+                session_id: None,
+                error: Some(format!("failed to spawn process: {e}")),
+                requires_user_approval: None,
+                action_required: None,
+                directory: None,
+            }
         }
     }
 }
 
-async fn stop_runner(State(state): State<RunnerState>) -> (StatusCode, Json<Value>) {
+async fn spawn_session(
+    State(state): State<RunnerState>,
+    Json(req): Json<SpawnSessionRequest>,
+) -> (StatusCode, Json<SpawnSessionResponse>) {
+    let resp = do_spawn_session(&state, req).await;
+    let status = if resp.success {
+        StatusCode::OK
+    } else if resp.error.is_some() {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::OK
+    };
+    (status, Json(resp))
+}
+
+/// Request runner shutdown. Shared logic used by both HTTP handler and RPC.
+pub async fn do_stop_runner(state: &RunnerState) -> Value {
     info!("runner stop requested");
     if let Some(tx) = state.shutdown_tx.lock().await.take() {
         let _ = tx.send(ShutdownSource::HapiCli);
     }
-    (StatusCode::OK, Json(json!({"status": "ok"})))
+    json!({"status": "ok"})
+}
+
+async fn stop_runner(State(state): State<RunnerState>) -> (StatusCode, Json<Value>) {
+    let result = do_stop_runner(&state).await;
+    (StatusCode::OK, Json(result))
 }

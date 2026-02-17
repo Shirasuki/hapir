@@ -120,7 +120,7 @@ fn get_machine_id(config: &Configuration) -> anyhow::Result<String> {
     let settings = persistence::read_settings(&config.settings_file)?;
     settings
         .machine_id
-        .ok_or_else(|| anyhow::anyhow!("No machine ID found in settings. Run 'hapi auth login' first."))
+        .ok_or_else(|| anyhow::anyhow!("No machine ID found in settings. Run 'hapir auth login' first."))
 }
 
 /// Bootstrap a session: create machine, create session, connect WS client.

@@ -29,6 +29,10 @@ pub fn router() -> Router<AppState> {
         .route("/sessions/{id}/switch", post(switch_session))
         .route("/sessions/{id}/permission-mode", post(set_permission_mode))
         .route("/sessions/{id}/model", post(set_model))
+        .route("/sessions/{id}/slash-commands", get(list_slash_commands))
+        .route("/sessions/{id}/skills", get(list_skills))
+        .route("/sessions/{id}/upload", post(upload_file))
+        .route("/sessions/{id}/upload/delete", post(delete_upload_file))
 }
 
 fn pending_count(session: &hapir_shared::schemas::Session) -> usize {

@@ -87,9 +87,9 @@ impl HappyBot {
                                     }]],
                                 };
                                 let reply = if text.starts_with("/start") {
-                                    "Welcome to HAPI Bot!\n\nUse the Mini App for full session management."
+                                    "Welcome to HAPIR Bot!\n\nUse the Mini App for full session management."
                                 } else {
-                                    "Open HAPI Mini App:"
+                                    "Open HAPIR Mini App:"
                                 };
                                 if let Err(e) =
                                     api.send_message(chat_id, reply, Some(&keyboard)).await

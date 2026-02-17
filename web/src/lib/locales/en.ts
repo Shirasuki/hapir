@@ -26,10 +26,10 @@ export default {
   'login.server.default': '(Default)',
   'login.server.custom': '(Custom)',
   'login.server.title': 'Hub URL',
-  'login.server.description': 'Set hapi hub origin for API and live updates.',
+  'login.server.description': 'Set hapir hub origin for API and live updates.',
   'login.server.current': 'Current:',
   'login.server.origin': 'Hub origin',
-  'login.server.placeholder': 'https://hapi.example.com',
+  'login.server.placeholder': 'https://hapir.example.com',
   'login.server.hint': 'Use http(s) only. Any path is ignored.',
   'login.server.required': 'Hub URL required. Please set it before signing in.',
   'login.server.useSameOrigin': 'Use same origin',
@@ -248,7 +248,7 @@ export default {
   'settings.about.title': 'About',
   'settings.about.appVersion': 'App Version',
   'settings.about.protocolVersion': 'Protocol Version',
-  'settings.about.credit': 'This project is derived from HAPI.',
+  'settings.about.credit': 'This project is derived from HAPIR.',
 
   // Misc
   'misc.noMachines': 'No machines available',

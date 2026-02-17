@@ -116,13 +116,13 @@ mod tests {
 
     #[test]
     fn deep_link_with_valid_url() {
-        let link = build_mini_app_deep_link("https://app.hapi.run", "session_abc123");
+        let link = build_mini_app_deep_link("https://app.hapir.cc", "session_abc123");
         assert!(link.contains("startapp=session_abc123"));
     }
 
     #[test]
     fn deep_link_with_existing_query() {
-        let link = build_mini_app_deep_link("https://app.hapi.run?foo=bar", "session_abc");
+        let link = build_mini_app_deep_link("https://app.hapir.cc?foo=bar", "session_abc");
         assert!(link.contains("startapp=session_abc"));
         assert!(link.contains("foo=bar"));
     }

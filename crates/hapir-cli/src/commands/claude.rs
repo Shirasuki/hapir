@@ -30,11 +30,11 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("CLI_API_TOKEN") {
-                error!("Authentication required. Run 'hapi auth login' first.");
+                error!("Authentication required. Run 'hapir auth login' first.");
                 bail!("{e}");
             }
             if msg.contains("failed to register machine") {
-                error!("Could not reach the hub. Is it running? Check 'hapi doctor'.");
+                error!("Could not reach the hub. Is it running? Check 'hapir doctor'.");
                 bail!("{e}");
             }
             return Err(e);
@@ -44,7 +44,7 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
     let options = StartOptions {
         model: args.model,
         permission_mode,
-        starting_mode: args.hapi_starting_mode,
+        starting_mode: args.hapir_starting_mode,
         should_start_runner: Some(true),
         claude_env_vars: None,
         claude_args: if args.passthrough_args.is_empty() {
@@ -64,7 +64,7 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
 pub struct ClaudeArgs {
     /// Starting mode for the session
     #[arg(long)]
-    pub hapi_starting_mode: Option<String>,
+    pub hapir_starting_mode: Option<String>,
 
     /// Bypass permission prompts
     #[arg(long)]

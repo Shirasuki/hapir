@@ -5,7 +5,7 @@ pub fn run() -> anyhow::Result<()> {
     let config = Configuration::create()?;
     let settings = persistence::read_settings(&config.settings_file)?;
 
-    println!("HAPI Doctor\n");
+    println!("HAPIR Doctor\n");
     println!("  Version: {}", env!("CARGO_PKG_VERSION"));
     println!("  Home Dir: {}", config.home_dir.display());
     println!("  Settings File: {}", config.settings_file.display());

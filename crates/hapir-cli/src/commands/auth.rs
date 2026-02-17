@@ -50,7 +50,7 @@ fn show_status(config: &Configuration) -> anyhow::Result<()> {
         println!("    2. Read ~/.hapi/settings.json on the server");
         println!("    3. Ask your server administrator (if token is set via env var)");
         println!();
-        println!("  Then run: hapi auth login");
+        println!("  Then run: hapir auth login");
     }
 
     Ok(())
@@ -96,7 +96,7 @@ fn logout(config: &Configuration) -> anyhow::Result<()> {
 }
 
 fn show_help() {
-    eprintln!("Unknown auth action. Run 'hapi auth --help' for usage.");
+    eprintln!("Unknown auth action. Run 'hapir auth --help' for usage.");
 }
 
 fn hostname() -> String {

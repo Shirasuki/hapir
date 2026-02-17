@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-/// Global configuration for HAPI CLI.
+/// Global configuration for HAPIR CLI.
 ///
 /// Centralizes API URL, token, home directory, and path configuration.
 #[derive(Debug, Clone)]

@@ -22,7 +22,7 @@ pub fn initialize_token(config: &mut Configuration) -> Result<()> {
     if !atty::is(atty::Stream::Stdin) {
         bail!(
             "CLI_API_TOKEN is not set and stdin is not a TTY.\n\
-             Run 'hapi auth login' or set the CLI_API_TOKEN environment variable."
+             Run 'hapir auth login' or set the CLI_API_TOKEN environment variable."
         );
     }
 
@@ -52,8 +52,8 @@ pub fn initialize_token(config: &mut Configuration) -> Result<()> {
     Ok(())
 }
 
-/// Register (or confirm) the machine with the hub API.
-pub async fn auth_and_setup_machine(config: &Configuration) -> Result<()> {
+/// Register (or confirm) the machine with the hub API. Returns the machine_id.
+pub async fn auth_and_setup_machine(config: &Configuration) -> Result<String> {
     let api = ApiClient::new(config)?;
     let settings = persistence::read_settings(&config.settings_file)?;
 
@@ -77,7 +77,7 @@ pub async fn auth_and_setup_machine(config: &Configuration) -> Result<()> {
         s.machine_id_confirmed_by_server = Some(true);
     })?;
 
-    Ok(())
+    Ok(machine_id)
 }
 
 /// Ensure the runner process is alive, auto-starting it if needed.
@@ -127,7 +127,7 @@ pub async fn ensure_runner(config: &Configuration) -> Result<Option<u16>> {
 /// token -> machine registration -> runner check.
 pub async fn full_init(config: &mut Configuration) -> Result<Option<u16>> {
     initialize_token(config)?;
-    auth_and_setup_machine(config).await?;
+    let _machine_id = auth_and_setup_machine(config).await?;
     ensure_runner(config).await
 }
 
