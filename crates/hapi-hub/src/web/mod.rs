@@ -1,5 +1,6 @@
 pub mod middleware;
 pub mod routes;
+pub mod static_files;
 pub mod telegram_init_data;
 
 use std::path::PathBuf;
@@ -56,5 +57,6 @@ pub fn build_router(state: AppState) -> Router {
             middleware::auth::jwt_auth,
         ))
         .layer(cors)
+        .fallback(static_files::static_handler)
         .with_state(state)
 }
