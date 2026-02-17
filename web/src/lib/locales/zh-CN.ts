@@ -229,8 +229,8 @@ export default {
   'send.blocked.noConnection': '未连接到服务器',
 
   // Install prompt
-  'install.title': '安装 HAPI',
-  'install.description': '将 HAPI 添加到主屏幕以便快速访问。',
+  'install.title': '安装 HAPIR',
+  'install.description': '将 HAPIR 添加到主屏幕以便快速访问。',
   'install.button': '安装',
 
   // Language switcher

@@ -227,8 +227,8 @@ export default {
   'send.blocked.noConnection': 'Not connected to server',
 
   // Install prompt
-  'install.title': 'Install HAPI',
-  'install.description': 'Add HAPI to your home screen for quick access.',
+  'install.title': 'Install HAPIR',
+  'install.description': 'Add HAPIR to your home screen for quick access.',
   'install.button': 'Install',
 
   // Language switcher

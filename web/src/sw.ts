@@ -97,7 +97,7 @@ self.addEventListener('push', (event) => {
         return
     }
 
-    const title = payload.title || 'HAPI'
+    const title = payload.title || 'HAPIR'
     const body = payload.body ?? ''
     const icon = payload.icon ?? '/pwa-192x192.png'
     const badge = payload.badge ?? '/pwa-64x64.png'
