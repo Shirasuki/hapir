@@ -526,3 +526,228 @@ async fn set_model(
         Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": e.to_string() }))),
     }
 }
+
+// ---------- slash-commands & skills ----------
+
+async fn list_slash_commands(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    let mut engine = state.sync_engine.lock().await;
+
+    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+        Ok(pair) => pair,
+        Err("access-denied") => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Session access denied" })),
+            )
+        }
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Session not found" })),
+            )
+        }
+    };
+
+    let agent = session
+        .metadata
+        .as_ref()
+        .and_then(|m| m.flavor.as_deref())
+        .unwrap_or("claude")
+        .to_string();
+
+    match engine.list_slash_commands(&session_id, &agent).await {
+        Ok(val) => (StatusCode::OK, Json(val)),
+        Err(e) => (
+            StatusCode::OK,
+            Json(json!({ "success": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+async fn list_skills(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    let mut engine = state.sync_engine.lock().await;
+
+    let (session_id, _session) = match engine.resolve_session_access(&id, &auth.namespace) {
+        Ok(pair) => pair,
+        Err("access-denied") => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Session access denied" })),
+            )
+        }
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Session not found" })),
+            )
+        }
+    };
+
+    match engine.list_skills(&session_id).await {
+        Ok(val) => (StatusCode::OK, Json(val)),
+        Err(e) => (
+            StatusCode::OK,
+            Json(json!({ "success": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+// ---------- upload ----------
+
+const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+
+/// Estimate decoded size from base64 string length.
+fn estimate_base64_bytes(len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    len * 3 / 4
+}
+
+#[derive(Deserialize)]
+struct UploadBody {
+    filename: String,
+    content: String,
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+}
+
+async fn upload_file(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(id): Path<String>,
+    body: Option<Json<UploadBody>>,
+) -> (StatusCode, Json<Value>) {
+    let Json(body) = match body {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid body" })),
+            )
+        }
+    };
+
+    if body.filename.is_empty() || body.filename.len() > 255 || body.content.is_empty() || body.mime_type.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid body" })),
+        );
+    }
+
+    if estimate_base64_bytes(body.content.len()) > MAX_UPLOAD_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "success": false, "error": "File too large (max 50MB)" })),
+        );
+    }
+
+    let mut engine = state.sync_engine.lock().await;
+
+    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+        Ok(pair) => pair,
+        Err("access-denied") => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Session access denied" })),
+            )
+        }
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Session not found" })),
+            )
+        }
+    };
+
+    if !session.active {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Session is inactive" })),
+        );
+    }
+
+    match engine.upload_file(&session_id, &body.filename, &body.content, &body.mime_type).await {
+        Ok(resp) => {
+            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({ "success": false }));
+            (StatusCode::OK, Json(val))
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "success": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct UploadDeleteBody {
+    path: String,
+}
+
+async fn delete_upload_file(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(id): Path<String>,
+    body: Option<Json<UploadDeleteBody>>,
+) -> (StatusCode, Json<Value>) {
+    let Json(body) = match body {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid body" })),
+            )
+        }
+    };
+
+    if body.path.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid body" })),
+        );
+    }
+
+    let mut engine = state.sync_engine.lock().await;
+
+    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+        Ok(pair) => pair,
+        Err("access-denied") => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Session access denied" })),
+            )
+        }
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Session not found" })),
+            )
+        }
+    };
+
+    if !session.active {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Session is inactive" })),
+        );
+    }
+
+    match engine.delete_upload_file(&session_id, &body.path).await {
+        Ok(resp) => {
+            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({ "success": false }));
+            (StatusCode::OK, Json(val))
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "success": false, "error": e.to_string() })),
+        ),
+    }
+}
