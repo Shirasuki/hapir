@@ -164,10 +164,32 @@ pub async fn run_hub() -> anyhow::Result<()> {
 
     info!(url = %config.public_url, "hub ready");
 
-    // Serve until shutdown
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // Use a Notify so we can trigger graceful shutdown from outside
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown_notify_srv = shutdown_notify.clone();
+
+    let server_task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                shutdown_notify_srv.notified().await;
+            })
+            .await
+    });
+
+    // Wait for OS signal
+    shutdown_signal().await;
+
+    // Actively close all WebSocket connections
+    info!("closing all WebSocket connections");
+    conn_mgr.close_all().await;
+
+    // Tell axum to stop accepting new connections
+    shutdown_notify.notify_one();
+
+    // Give axum up to 5s to finish, then force abort
+    if tokio::time::timeout(std::time::Duration::from_secs(5), server_task).await.is_err() {
+        info!("graceful shutdown timed out, forcing exit");
+    }
 
     // Graceful shutdown: stop bot
     if let Some(ref bot) = happy_bot {

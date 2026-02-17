@@ -120,6 +120,14 @@ impl ConnectionManager {
         }
     }
 
+    /// Send Close to all connections for graceful shutdown.
+    pub async fn close_all(&self) {
+        let conns = self.connections.read().await;
+        for conn in conns.values() {
+            let _ = conn.tx.send(WsOutMessage::Close);
+        }
+    }
+
     /// Broadcast to all connections in a session room, optionally excluding a sender.
     pub async fn broadcast_to_session(&self, session_id: &str, msg: &str, exclude: Option<&str>) {
         let rooms = self.session_rooms.read().await;

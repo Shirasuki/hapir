@@ -165,7 +165,10 @@ async fn handle_cli_ws(
         while let Some(msg) = out_rx.recv().await {
             let result = match msg {
                 WsOutMessage::Text(text) => ws_tx.send(Message::Text(text.into())).await,
-                WsOutMessage::Close => ws_tx.send(Message::Close(None)).await,
+                WsOutMessage::Close => {
+                    let _ = ws_tx.send(Message::Close(None)).await;
+                    break; // Drop ws_tx to force-close the connection
+                }
             };
             if result.is_err() {
                 break;
@@ -271,7 +274,10 @@ async fn handle_terminal_ws(
         while let Some(msg) = out_rx.recv().await {
             let result = match msg {
                 WsOutMessage::Text(text) => ws_tx.send(Message::Text(text.into())).await,
-                WsOutMessage::Close => ws_tx.send(Message::Close(None)).await,
+                WsOutMessage::Close => {
+                    let _ = ws_tx.send(Message::Close(None)).await;
+                    break; // Drop ws_tx to force-close the connection
+                }
             };
             if result.is_err() {
                 break;
