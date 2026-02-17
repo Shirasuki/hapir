@@ -16,7 +16,7 @@ use axum::{
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::config::cli_api_token;
@@ -32,7 +32,7 @@ const DEFAULT_IDLE_TIMEOUT_MS: u64 = 15 * 60_000;
 #[derive(Clone)]
 pub struct WsState {
     pub store: Arc<Store>,
-    pub sync_engine: Arc<Mutex<SyncEngine>>,
+    pub sync_engine: Arc<SyncEngine>,
     pub conn_mgr: Arc<ConnectionManager>,
     pub terminal_registry: Arc<RwLock<TerminalRegistry>>,
     pub cli_api_token: String,
@@ -280,7 +280,7 @@ async fn handle_cli_ws(
     if let Some(ref mid) = machine_id {
         info!(conn_id = %conn_id, machine_id = %mid, "Runner WebSocket 已断开");
         // Mark machine offline immediately on disconnect
-        state.sync_engine.lock().await.mark_machine_offline(mid);
+        state.sync_engine.mark_machine_offline(mid).await;
     } else {
         debug!(conn_id = %conn_id, "CLI WebSocket disconnected");
     }

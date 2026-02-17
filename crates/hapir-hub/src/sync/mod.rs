@@ -13,7 +13,7 @@ use std::sync::Arc;
 use hapir_shared::modes::{ModelMode, PermissionMode};
 use hapir_shared::schemas::{AttachmentMetadata, DecryptedMessage, Session, SyncEvent};
 use serde_json::Value;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc, RwLock};
 
 use crate::store::Store;
 use event_publisher::EventPublisher;
@@ -21,35 +21,39 @@ use machine_cache::{Machine, MachineCache};
 use message_service::{MessageService, MessagesPageResult};
 use rpc_gateway::{RpcGateway, RpcTransport};
 use session_cache::SessionCache;
-use sse_manager::SseManager;
+use sse_manager::{SseManager, SseMessage, SseSubscription};
+use visibility_tracker::VisibilityState;
 
 /// The central sync engine that coordinates sessions, machines, messages, and RPC.
+///
+/// All fields use internal locking so the engine can be shared as `Arc<SyncEngine>`.
+/// Lock ordering: session_cache → machine_cache. Never hold a cache lock across RPC calls.
 pub struct SyncEngine {
     store: Arc<Store>,
     publisher: EventPublisher,
-    session_cache: SessionCache,
-    machine_cache: MachineCache,
-    rpc_gateway: RpcGateway,
+    session_cache: RwLock<SessionCache>,
+    machine_cache: RwLock<MachineCache>,
+    rpc_gateway: Arc<RpcGateway>,
 }
 
 impl SyncEngine {
     pub fn new(store: Arc<Store>, rpc_transport: Arc<dyn RpcTransport>) -> Self {
         let sse_manager = SseManager::new(30_000);
-        let mut publisher = EventPublisher::new(sse_manager);
+        let publisher = EventPublisher::new(sse_manager);
         let mut session_cache = SessionCache::new();
         let mut machine_cache = MachineCache::new();
 
         // Load existing data from store
-        session_cache.reload_all(&store, &mut publisher);
-        machine_cache.reload_all(&store, &mut publisher);
+        session_cache.reload_all(&store, &publisher);
+        machine_cache.reload_all(&store, &publisher);
 
-        let rpc_gateway = RpcGateway::new(rpc_transport);
+        let rpc_gateway = Arc::new(RpcGateway::new(rpc_transport));
 
         Self {
             store,
             publisher,
-            session_cache,
-            machine_cache,
+            session_cache: RwLock::new(session_cache),
+            machine_cache: RwLock::new(machine_cache),
             rpc_gateway,
         }
     }
@@ -58,96 +62,137 @@ impl SyncEngine {
         self.publisher.subscribe()
     }
 
-    pub fn sse_manager(&self) -> &SseManager {
-        self.publisher.sse_manager()
+    // --- SSE delegate methods ---
+
+    pub fn subscribe_sse(
+        &self,
+        id: String,
+        namespace: String,
+        all: bool,
+        session_id: Option<String>,
+        machine_id: Option<String>,
+        visibility: VisibilityState,
+    ) -> (mpsc::UnboundedReceiver<SseMessage>, SseSubscription) {
+        self.publisher.subscribe_sse(id, namespace, all, session_id, machine_id, visibility)
     }
 
-    pub fn sse_manager_mut(&mut self) -> &mut SseManager {
-        self.publisher.sse_manager_mut()
+    pub fn unsubscribe_sse(&self, id: &str) {
+        self.publisher.unsubscribe_sse(id);
+    }
+
+    pub fn sse_connection_count(&self) -> usize {
+        self.publisher.sse_connection_count()
+    }
+
+    pub fn has_visible_sse_connection(&self, namespace: &str) -> bool {
+        self.publisher.has_visible_sse_connection(namespace)
+    }
+
+    pub fn set_sse_visibility(
+        &self,
+        subscription_id: &str,
+        namespace: &str,
+        state: VisibilityState,
+    ) -> bool {
+        self.publisher.set_sse_visibility(subscription_id, namespace, state)
+    }
+
+    pub fn send_heartbeats(&self) {
+        self.publisher.send_heartbeats();
+    }
+
+    pub fn send_sse_toast(&self, namespace: &str, event: &SyncEvent) -> usize {
+        self.publisher.send_toast(namespace, event)
+    }
+
+    pub fn heartbeat_ms(&self) -> u64 {
+        self.publisher.heartbeat_ms()
     }
 
     // --- Session accessors ---
 
-    pub fn get_sessions(&self) -> Vec<Session> {
-        self.session_cache.get_sessions()
+    pub async fn get_sessions(&self) -> Vec<Session> {
+        self.session_cache.read().await.get_sessions()
     }
 
-    pub fn get_sessions_by_namespace(&self, namespace: &str) -> Vec<Session> {
-        self.session_cache.get_sessions_by_namespace(namespace)
+    pub async fn get_sessions_by_namespace(&self, namespace: &str) -> Vec<Session> {
+        self.session_cache.read().await.get_sessions_by_namespace(namespace)
     }
 
-    pub fn get_session(&mut self, session_id: &str) -> Option<Session> {
-        self.session_cache
-            .get_session(session_id)
-            .cloned()
-            .or_else(|| self.session_cache.refresh_session(session_id, &self.store, &mut self.publisher))
+    pub async fn get_session(&self, session_id: &str) -> Option<Session> {
+        if let Some(s) = self.session_cache.read().await.get_session(session_id).cloned() {
+            return Some(s);
+        }
+        self.session_cache.write().await.refresh_session(session_id, &self.store, &self.publisher)
     }
 
-    pub fn get_session_by_namespace(&mut self, session_id: &str, namespace: &str) -> Option<Session> {
-        let session = self
-            .session_cache
-            .get_session_by_namespace(session_id, namespace)
-            .cloned()
-            .or_else(|| self.session_cache.refresh_session(session_id, &self.store, &mut self.publisher));
+    pub async fn get_session_by_namespace(&self, session_id: &str, namespace: &str) -> Option<Session> {
+        {
+            let cache = self.session_cache.read().await;
+            if let Some(s) = cache.get_session_by_namespace(session_id, namespace).cloned() {
+                return Some(s);
+            }
+        }
+        let session = self.session_cache.write().await.refresh_session(session_id, &self.store, &self.publisher);
         session.filter(|s| s.namespace == namespace)
     }
 
-    pub fn resolve_session_access(
-        &mut self,
+    pub async fn resolve_session_access(
+        &self,
         session_id: &str,
         namespace: &str,
     ) -> Result<(String, Session), &'static str> {
-        self.session_cache.resolve_session_access(session_id, namespace, &self.store, &mut self.publisher)
+        self.session_cache.write().await.resolve_session_access(session_id, namespace, &self.store, &self.publisher)
     }
 
-    pub fn get_active_sessions(&self) -> Vec<Session> {
-        self.session_cache.get_active_sessions()
+    pub async fn get_active_sessions(&self) -> Vec<Session> {
+        self.session_cache.read().await.get_active_sessions()
     }
 
-    pub fn get_or_create_session(
-        &mut self,
+    pub async fn get_or_create_session(
+        &self,
         tag: &str,
         metadata: &Value,
         agent_state: Option<&Value>,
         namespace: &str,
     ) -> anyhow::Result<Session> {
-        self.session_cache.get_or_create_session(tag, metadata, agent_state, namespace, &self.store, &mut self.publisher)
+        self.session_cache.write().await.get_or_create_session(tag, metadata, agent_state, namespace, &self.store, &self.publisher)
     }
 
     // --- Machine accessors ---
 
-    pub fn get_machines(&self) -> Vec<Machine> {
-        self.machine_cache.get_machines()
+    pub async fn get_machines(&self) -> Vec<Machine> {
+        self.machine_cache.read().await.get_machines()
     }
 
-    pub fn get_machines_by_namespace(&self, namespace: &str) -> Vec<Machine> {
-        self.machine_cache.get_machines_by_namespace(namespace)
+    pub async fn get_machines_by_namespace(&self, namespace: &str) -> Vec<Machine> {
+        self.machine_cache.read().await.get_machines_by_namespace(namespace)
     }
 
-    pub fn get_machine(&self, machine_id: &str) -> Option<&Machine> {
-        self.machine_cache.get_machine(machine_id)
+    pub async fn get_machine(&self, machine_id: &str) -> Option<Machine> {
+        self.machine_cache.read().await.get_machine(machine_id).cloned()
     }
 
-    pub fn get_machine_by_namespace(&self, machine_id: &str, namespace: &str) -> Option<&Machine> {
-        self.machine_cache.get_machine_by_namespace(machine_id, namespace)
+    pub async fn get_machine_by_namespace(&self, machine_id: &str, namespace: &str) -> Option<Machine> {
+        self.machine_cache.read().await.get_machine_by_namespace(machine_id, namespace).cloned()
     }
 
-    pub fn get_online_machines(&self) -> Vec<Machine> {
-        self.machine_cache.get_online_machines()
+    pub async fn get_online_machines(&self) -> Vec<Machine> {
+        self.machine_cache.read().await.get_online_machines()
     }
 
-    pub fn get_online_machines_by_namespace(&self, namespace: &str) -> Vec<Machine> {
-        self.machine_cache.get_online_machines_by_namespace(namespace)
+    pub async fn get_online_machines_by_namespace(&self, namespace: &str) -> Vec<Machine> {
+        self.machine_cache.read().await.get_online_machines_by_namespace(namespace)
     }
 
-    pub fn get_or_create_machine(
-        &mut self,
+    pub async fn get_or_create_machine(
+        &self,
         id: &str,
         metadata: &Value,
         runner_state: Option<&Value>,
         namespace: &str,
     ) -> anyhow::Result<Machine> {
-        self.machine_cache.get_or_create_machine(id, metadata, runner_state, namespace, &self.store, &mut self.publisher)
+        self.machine_cache.write().await.get_or_create_machine(id, metadata, runner_state, namespace, &self.store, &self.publisher)
     }
 
     // --- Messages ---
@@ -160,32 +205,33 @@ impl SyncEngine {
         MessageService::get_messages_after(&self.store, session_id, after_seq, limit)
     }
 
-    pub fn send_message(
-        &mut self,
+    pub async fn send_message(
+        &self,
         session_id: &str,
         text: &str,
         local_id: Option<&str>,
         attachments: Option<&[AttachmentMetadata]>,
         sent_from: Option<&str>,
     ) -> anyhow::Result<()> {
-        MessageService::send_message(&self.store, &mut self.publisher, session_id, text, local_id, attachments, sent_from)
+        MessageService::send_message(&self.store, &self.publisher, session_id, text, local_id, attachments, sent_from)
     }
 
     // --- Realtime event handling ---
 
-    pub fn handle_realtime_event(&mut self, event: SyncEvent) {
+    pub async fn handle_realtime_event(&self, event: SyncEvent) {
         match &event {
             SyncEvent::SessionUpdated { session_id, .. } => {
-                self.session_cache.refresh_session(session_id, &self.store, &mut self.publisher);
+                self.session_cache.write().await.refresh_session(session_id, &self.store, &self.publisher);
                 return;
             }
             SyncEvent::MachineUpdated { machine_id, .. } => {
-                self.machine_cache.refresh_machine(machine_id, &self.store, &mut self.publisher);
+                self.machine_cache.write().await.refresh_machine(machine_id, &self.store, &self.publisher);
                 return;
             }
             SyncEvent::MessageReceived { session_id, .. } => {
-                if self.session_cache.get_session(session_id).is_none() {
-                    self.session_cache.refresh_session(session_id, &self.store, &mut self.publisher);
+                let needs_refresh = self.session_cache.read().await.get_session(session_id).is_none();
+                if needs_refresh {
+                    self.session_cache.write().await.refresh_session(session_id, &self.store, &self.publisher);
                 }
             }
             _ => {}
@@ -193,39 +239,37 @@ impl SyncEngine {
         self.publisher.emit(event);
     }
 
-    pub fn handle_session_alive(
-        &mut self,
+    pub async fn handle_session_alive(
+        &self,
         sid: &str,
         time: i64,
         thinking: Option<bool>,
         permission_mode: Option<PermissionMode>,
         model_mode: Option<ModelMode>,
     ) {
-        self.session_cache.handle_session_alive(
-            sid, time, thinking, permission_mode, model_mode, &self.store, &mut self.publisher,
+        self.session_cache.write().await.handle_session_alive(
+            sid, time, thinking, permission_mode, model_mode, &self.store, &self.publisher,
         );
     }
 
-    pub fn handle_session_end(&mut self, sid: &str, time: i64) {
-        self.session_cache.handle_session_end(sid, time, &self.store, &mut self.publisher);
+    pub async fn handle_session_end(&self, sid: &str, time: i64) {
+        self.session_cache.write().await.handle_session_end(sid, time, &self.store, &self.publisher);
     }
 
-    pub fn handle_machine_alive(&mut self, machine_id: &str, time: i64) {
-        self.machine_cache.handle_machine_alive(machine_id, time, &self.store, &mut self.publisher);
+    pub async fn handle_machine_alive(&self, machine_id: &str, time: i64) {
+        self.machine_cache.write().await.handle_machine_alive(machine_id, time, &self.store, &self.publisher);
     }
 
     /// Mark a machine as offline immediately (e.g. on WebSocket disconnect).
-    pub fn mark_machine_offline(&mut self, machine_id: &str) {
-        self.machine_cache.mark_machine_offline(machine_id, &mut self.publisher);
+    pub async fn mark_machine_offline(&self, machine_id: &str) {
+        self.machine_cache.write().await.mark_machine_offline(machine_id, &self.publisher);
     }
 
     /// Called periodically to expire inactive sessions and machines.
-    pub fn expire_inactive(&mut self) {
-        self.session_cache.expire_inactive(&mut self.publisher);
-        self.machine_cache.expire_inactive(&mut self.publisher);
+    pub async fn expire_inactive(&self) {
+        self.session_cache.write().await.expire_inactive(&self.publisher);
+        self.machine_cache.write().await.expire_inactive(&self.publisher);
     }
-
-    // PLACEHOLDER_SYNC_ENGINE_PART2
 
     // --- RPC delegations ---
 
@@ -254,13 +298,14 @@ impl SyncEngine {
         self.rpc_gateway.abort_session(session_id).await
     }
 
-    pub async fn archive_session(&mut self, session_id: &str) -> anyhow::Result<()> {
+    /// Archive: RPC kill (no lock) → then update cache
+    pub async fn archive_session(&self, session_id: &str) -> anyhow::Result<()> {
         self.rpc_gateway.kill_session(session_id).await?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
-        self.handle_session_end(session_id, now);
+        self.handle_session_end(session_id, now).await;
         Ok(())
     }
 
@@ -268,16 +313,17 @@ impl SyncEngine {
         self.rpc_gateway.switch_session(session_id, to).await
     }
 
-    pub fn rename_session(&mut self, session_id: &str, name: &str) -> anyhow::Result<()> {
-        self.session_cache.rename_session(session_id, name, &self.store, &mut self.publisher)
+    pub async fn rename_session(&self, session_id: &str, name: &str) -> anyhow::Result<()> {
+        self.session_cache.write().await.rename_session(session_id, name, &self.store, &self.publisher)
     }
 
-    pub fn delete_session(&mut self, session_id: &str) -> anyhow::Result<()> {
-        self.session_cache.delete_session(session_id, &self.store, &mut self.publisher)
+    pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<()> {
+        self.session_cache.write().await.delete_session(session_id, &self.store, &self.publisher)
     }
 
+    /// Apply session config: RPC (no lock) → then update cache
     pub async fn apply_session_config(
-        &mut self,
+        &self,
         session_id: &str,
         permission_mode: Option<PermissionMode>,
         model_mode: Option<ModelMode>,
@@ -289,7 +335,7 @@ impl SyncEngine {
             .and_then(|v| serde_json::from_value(v.clone()).ok());
         let mm: Option<ModelMode> = applied.get("modelMode")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
-        self.session_cache.apply_session_config(session_id, pm, mm, &self.store, &mut self.publisher);
+        self.session_cache.write().await.apply_session_config(session_id, pm, mm, &self.store, &self.publisher);
         Ok(())
     }
 
@@ -351,36 +397,40 @@ impl SyncEngine {
         self.rpc_gateway.list_skills(session_id).await
     }
 
-    pub fn merge_sessions(
-        &mut self,
+    pub async fn merge_sessions(
+        &self,
         old_session_id: &str,
         new_session_id: &str,
         namespace: &str,
     ) -> anyhow::Result<()> {
-        self.session_cache.merge_sessions(old_session_id, new_session_id, namespace, &self.store, &mut self.publisher)
+        self.session_cache.write().await.merge_sessions(old_session_id, new_session_id, namespace, &self.store, &self.publisher)
     }
 
     /// Resume an inactive session by finding a suitable machine and spawning.
+    /// Follows lock discipline: read/write lock → release → RPC (no lock) → write lock
     pub async fn resume_session(
-        &mut self,
+        &self,
         session_id: &str,
         namespace: &str,
     ) -> ResumeSessionResult {
-        let access = self.session_cache.resolve_session_access(
-            session_id, namespace, &self.store, &mut self.publisher,
-        );
-        let (original_id, session) = match access {
-            Ok(pair) => pair,
-            Err("access-denied") => {
-                return ResumeSessionResult::Error {
-                    message: "Session access denied".into(),
-                    code: ResumeSessionErrorCode::AccessDenied,
+        // Phase 1: validate session access (write lock for potential refresh)
+        let (original_id, session) = {
+            let access = self.session_cache.write().await.resolve_session_access(
+                session_id, namespace, &self.store, &self.publisher,
+            );
+            match access {
+                Ok(pair) => pair,
+                Err("access-denied") => {
+                    return ResumeSessionResult::Error {
+                        message: "Session access denied".into(),
+                        code: ResumeSessionErrorCode::AccessDenied,
+                    }
                 }
-            }
-            Err(_) => {
-                return ResumeSessionResult::Error {
-                    message: "Session not found".into(),
-                    code: ResumeSessionErrorCode::SessionNotFound,
+                Err(_) => {
+                    return ResumeSessionResult::Error {
+                        message: "Session not found".into(),
+                        code: ResumeSessionErrorCode::SessionNotFound,
+                    }
                 }
             }
         };
@@ -423,34 +473,38 @@ impl SyncEngine {
             }
         };
 
-        let online_machines = self.machine_cache.get_online_machines_by_namespace(namespace);
-        if online_machines.is_empty() {
-            return ResumeSessionResult::Error {
-                message: "No machine online".into(),
-                code: ResumeSessionErrorCode::NoMachineOnline,
-            };
-        }
-
-        // Find target machine: prefer exact match by machine_id, then by host
-        let target = online_machines.iter().find(|m| {
-            metadata.machine_id.as_deref() == Some(&m.id)
-        }).or_else(|| {
-            let host = metadata.host.as_str();
-            online_machines.iter().find(|m| {
-                m.metadata.as_ref().is_some_and(|meta| meta.host == host)
-            })
-        });
-
-        let target = match target {
-            Some(m) => m.clone(),
-            None => {
+        // Phase 2: find target machine (read lock, then release)
+        let target = {
+            let mc = self.machine_cache.read().await;
+            let online_machines = mc.get_online_machines_by_namespace(namespace);
+            if online_machines.is_empty() {
                 return ResumeSessionResult::Error {
                     message: "No machine online".into(),
                     code: ResumeSessionErrorCode::NoMachineOnline,
+                };
+            }
+
+            let found = online_machines.iter().find(|m| {
+                metadata.machine_id.as_deref() == Some(&m.id)
+            }).or_else(|| {
+                let host = metadata.host.as_str();
+                online_machines.iter().find(|m| {
+                    m.metadata.as_ref().is_some_and(|meta| meta.host == host)
+                })
+            });
+
+            match found {
+                Some(m) => m.clone(),
+                None => {
+                    return ResumeSessionResult::Error {
+                        message: "No machine online".into(),
+                        code: ResumeSessionErrorCode::NoMachineOnline,
+                    }
                 }
             }
         };
 
+        // Phase 3: RPC spawn (no lock held)
         let spawn_result = self.rpc_gateway.spawn_session(
             &target.id,
             &metadata.path,
@@ -488,6 +542,7 @@ impl SyncEngine {
             }
         };
 
+        // Phase 4: poll for active (short read locks each iteration)
         if !self.wait_for_session_active(&spawn_session_id, 15_000).await {
             return ResumeSessionResult::Error {
                 message: "Session failed to become active".into(),
@@ -495,10 +550,10 @@ impl SyncEngine {
             };
         }
 
-        // Merge old session into new if they differ
+        // Phase 5: merge sessions (write lock)
         if spawn_session_id != original_id {
-            if let Err(e) = self.session_cache.merge_sessions(
-                &original_id, &spawn_session_id, namespace, &self.store, &mut self.publisher,
+            if let Err(e) = self.session_cache.write().await.merge_sessions(
+                &original_id, &spawn_session_id, namespace, &self.store, &self.publisher,
             ) {
                 return ResumeSessionResult::Error {
                     message: e.to_string(),
@@ -511,12 +566,13 @@ impl SyncEngine {
     }
 
     /// Poll until a session becomes active, up to timeout_ms.
-    pub async fn wait_for_session_active(&mut self, session_id: &str, timeout_ms: u64) -> bool {
+    /// Each poll iteration takes a short read lock then releases it.
+    pub async fn wait_for_session_active(&self, session_id: &str, timeout_ms: u64) -> bool {
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_millis(timeout_ms);
 
         loop {
-            if let Some(session) = self.get_session(session_id) {
+            if let Some(session) = self.get_session(session_id).await {
                 if session.active {
                     return true;
                 }

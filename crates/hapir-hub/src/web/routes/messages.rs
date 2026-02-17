@@ -39,10 +39,8 @@ async fn list_messages(
     Path(id): Path<String>,
     Query(query): Query<MessagesQuery>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-
     // Verify session access
-    let session_id = match engine.resolve_session_access(&id, &auth.namespace) {
+    let session_id = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok((sid, _session)) => sid,
         Err("access-denied") => {
             return (
@@ -62,7 +60,7 @@ async fn list_messages(
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let before_seq = query.before_seq.filter(|&s| s >= 1);
 
-    let result = engine.get_messages_page(&session_id, limit, before_seq);
+    let result = state.sync_engine.get_messages_page(&session_id, limit, before_seq);
 
     (
         StatusCode::OK,
@@ -100,10 +98,8 @@ async fn create_message(
         );
     }
 
-    let mut engine = state.sync_engine.lock().await;
-
     // Verify session access and require active
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -128,13 +124,13 @@ async fn create_message(
 
     let attachments_slice = body.attachments.as_deref();
 
-    match engine.send_message(
+    match state.sync_engine.send_message(
         &session_id,
         &body.text,
         body.local_id.as_deref(),
         attachments_slice,
         Some("webapp"),
-    ) {
+    ).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

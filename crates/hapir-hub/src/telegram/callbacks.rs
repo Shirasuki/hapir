@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
 use tracing::error;
 
 use hapir_shared::schemas::Session;
@@ -16,7 +15,7 @@ pub const DENY_ACTION: &str = "dn";
 /// Handle a Telegram callback query from an inline keyboard button press.
 pub async fn handle_callback(
     data: &str,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     namespace: &str,
     api: &TelegramApi,
     chat_id: i64,
@@ -48,8 +47,6 @@ pub async fn handle_callback(
                 };
 
                 sync_engine
-                    .lock()
-                    .await
                     .approve_permission(&session.id, &request_id, None, None, None, None)
                     .await?;
                 api.answer_callback_query(callback_query_id, Some("Approved!"))
@@ -87,8 +84,6 @@ pub async fn handle_callback(
                 };
 
                 sync_engine
-                    .lock()
-                    .await
                     .deny_permission(&session.id, &request_id, None)
                     .await?;
                 api.answer_callback_query(callback_query_id, Some("Denied"))
@@ -123,7 +118,7 @@ pub async fn handle_callback(
 }
 
 async fn get_session_or_answer(
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     namespace: &str,
     session_prefix: &str,
     api: &TelegramApi,
@@ -131,9 +126,7 @@ async fn get_session_or_answer(
     require_active: bool,
 ) -> anyhow::Result<Option<Session>> {
     let sessions = sync_engine
-        .lock()
-        .await
-        .get_sessions_by_namespace(namespace);
+        .get_sessions_by_namespace(namespace).await;
     let session = find_session_by_prefix(&sessions, session_prefix).cloned();
 
     match session {

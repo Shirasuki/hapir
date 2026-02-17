@@ -48,54 +48,49 @@ async fn events_handler(
     let mut resolved_session_id = session_id.clone();
 
     // Validate session_id and machine_id if provided
-    if session_id.is_some() || machine_id.is_some() {
-        let mut engine = state.sync_engine.lock().await;
-
-        if let Some(ref sid) = session_id {
-            let access = engine.resolve_session_access(sid, &namespace);
-            match access {
-                Ok((resolved_id, _session)) => {
-                    resolved_session_id = Some(resolved_id);
-                }
-                Err("access-denied") => {
-                    return Err((
-                        StatusCode::FORBIDDEN,
-                        Json(json!({"error": "Session access denied"})),
-                    ));
-                }
-                Err(_) => {
-                    return Err((
-                        StatusCode::NOT_FOUND,
-                        Json(json!({"error": "Session not found"})),
-                    ));
-                }
+    if let Some(ref sid) = session_id {
+        let access = state.sync_engine.resolve_session_access(sid, &namespace).await;
+        match access {
+            Ok((resolved_id, _session)) => {
+                resolved_session_id = Some(resolved_id);
+            }
+            Err("access-denied") => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"error": "Session access denied"})),
+                ));
+            }
+            Err(_) => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "Session not found"})),
+                ));
             }
         }
+    }
 
-        if let Some(ref mid) = machine_id {
-            let machine = engine.get_machine(mid);
-            match machine {
-                None => {
-                    return Err((
-                        StatusCode::NOT_FOUND,
-                        Json(json!({"error": "Machine not found"})),
-                    ));
-                }
-                Some(m) if m.namespace != namespace => {
-                    return Err((
-                        StatusCode::FORBIDDEN,
-                        Json(json!({"error": "Machine access denied"})),
-                    ));
-                }
-                _ => {}
+    if let Some(ref mid) = machine_id {
+        let machine = state.sync_engine.get_machine(mid).await;
+        match machine {
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "Machine not found"})),
+                ));
             }
+            Some(m) if m.namespace != namespace => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"error": "Machine access denied"})),
+                ));
+            }
+            _ => {}
         }
     }
 
     // Subscribe via the SSE manager
     let rx = {
-        let mut engine = state.sync_engine.lock().await;
-        let (rx, _sub) = engine.sse_manager_mut().subscribe(
+        let (rx, _sub) = state.sync_engine.subscribe_sse(
             subscription_id.clone(),
             namespace.clone(),
             all,
@@ -156,11 +151,7 @@ struct CleanupStream<S> {
 impl<S> Drop for CleanupStream<S> {
     fn drop(&mut self) {
         if let (Some(state), Some(sub_id)) = (self.state.take(), self.subscription_id.take()) {
-            // Spawn a task to clean up the subscription
-            tokio::spawn(async move {
-                let mut engine = state.sync_engine.lock().await;
-                engine.sse_manager_mut().unsubscribe(&sub_id);
-            });
+            state.sync_engine.unsubscribe_sse(&sub_id);
         }
     }
 }
@@ -216,11 +207,8 @@ async fn set_visibility(
         VisibilityState::Hidden
     };
 
-    let mut engine = state.sync_engine.lock().await;
-    let updated = engine
-        .sse_manager_mut()
-        .visibility_mut()
-        .set_visibility(&body.subscription_id, &auth.namespace, vis);
+    let updated = state.sync_engine
+        .set_sse_visibility(&body.subscription_id, &auth.namespace, vis);
 
     if !updated {
         return (

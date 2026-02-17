@@ -57,8 +57,7 @@ async fn list_sessions(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
 ) -> (StatusCode, Json<Value>) {
-    let engine = state.sync_engine.lock().await;
-    let mut sessions = engine.get_sessions_by_namespace(&auth.namespace);
+    let mut sessions = state.sync_engine.get_sessions_by_namespace(&auth.namespace).await;
 
     sessions.sort_by(|a, b| {
         // Active sessions first
@@ -92,8 +91,7 @@ async fn get_session(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-    match engine.resolve_session_access(&id, &auth.namespace) {
+    match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok((_session_id, session)) => (StatusCode::OK, Json(json!({ "session": session }))),
         Err("access-denied") => (
             StatusCode::FORBIDDEN,
@@ -111,9 +109,7 @@ async fn delete_session(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -136,7 +132,7 @@ async fn delete_session(
         );
     }
 
-    match engine.delete_session(&session_id) {
+    match state.sync_engine.delete_session(&session_id).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             let message = e.to_string();
@@ -180,9 +176,7 @@ async fn update_session(
         );
     }
 
-    let mut engine = state.sync_engine.lock().await;
-
-    let session_id = match engine.resolve_session_access(&id, &auth.namespace) {
+    let session_id = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok((sid, _session)) => sid,
         Err("access-denied") => {
             return (
@@ -198,7 +192,7 @@ async fn update_session(
         }
     };
 
-    match engine.rename_session(&session_id, &body.name) {
+    match state.sync_engine.rename_session(&session_id, &body.name).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             let message = e.to_string();
@@ -219,10 +213,8 @@ async fn resume_session(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-
     // Verify the session exists and belongs to the namespace first
-    if let Err(reason) = engine.resolve_session_access(&id, &auth.namespace) {
+    if let Err(reason) = state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         return match reason {
             "access-denied" => (
                 StatusCode::FORBIDDEN,
@@ -235,7 +227,7 @@ async fn resume_session(
         };
     }
 
-    let result = engine.resume_session(&id, &auth.namespace).await;
+    let result = state.sync_engine.resume_session(&id, &auth.namespace).await;
     match result {
         ResumeSessionResult::Success { session_id } => (
             StatusCode::OK,
@@ -265,9 +257,7 @@ async fn archive_session(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -290,7 +280,7 @@ async fn archive_session(
         );
     }
 
-    match engine.archive_session(&session_id).await {
+    match state.sync_engine.archive_session(&session_id).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -304,9 +294,7 @@ async fn abort_session(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -329,7 +317,7 @@ async fn abort_session(
         );
     }
 
-    match engine.abort_session(&session_id).await {
+    match state.sync_engine.abort_session(&session_id).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -349,9 +337,7 @@ async fn switch_session(
     Path(id): Path<String>,
     body: Option<Json<SwitchBody>>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -378,7 +364,7 @@ async fn switch_session(
         .and_then(|Json(b)| b.to)
         .unwrap_or_else(|| "remote".to_string());
 
-    match engine.switch_session(&session_id, &to).await {
+    match state.sync_engine.switch_session(&session_id, &to).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -408,9 +394,7 @@ async fn set_permission_mode(
         }
     };
 
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -450,7 +434,7 @@ async fn set_permission_mode(
         );
     }
 
-    match engine
+    match state.sync_engine
         .apply_session_config(&session_id, Some(body.mode), None)
         .await
     {
@@ -483,9 +467,7 @@ async fn set_model(
         }
     };
 
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -517,7 +499,7 @@ async fn set_model(
         );
     }
 
-    match engine
+    match state.sync_engine
         .apply_session_config(&session_id, None, Some(body.model))
         .await
     {
@@ -536,9 +518,7 @@ async fn list_slash_commands(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -561,7 +541,7 @@ async fn list_slash_commands(
         .unwrap_or("claude")
         .to_string();
 
-    match engine.list_slash_commands(&session_id, &agent).await {
+    match state.sync_engine.list_slash_commands(&session_id, &agent).await {
         Ok(val) => (StatusCode::OK, Json(val)),
         Err(e) => (
             StatusCode::OK,
@@ -575,9 +555,7 @@ async fn list_skills(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, _session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, _session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -593,7 +571,7 @@ async fn list_skills(
         }
     };
 
-    match engine.list_skills(&session_id).await {
+    match state.sync_engine.list_skills(&session_id).await {
         Ok(val) => (StatusCode::OK, Json(val)),
         Err(e) => (
             StatusCode::OK,
@@ -664,9 +642,7 @@ async fn upload_file(
         );
     }
 
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -689,7 +665,7 @@ async fn upload_file(
         );
     }
 
-    match engine
+    match state.sync_engine
         .upload_file(&session_id, &body.filename, &body.content, &body.mime_type)
         .await
     {
@@ -732,9 +708,7 @@ async fn delete_upload_file(
         );
     }
 
-    let mut engine = state.sync_engine.lock().await;
-
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -757,7 +731,7 @@ async fn delete_upload_file(
         );
     }
 
-    match engine.delete_upload_file(&session_id, &body.path).await {
+    match state.sync_engine.delete_upload_file(&session_id, &body.path).await {
         Ok(resp) => {
             let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({ "success": false }));
             (StatusCode::OK, Json(val))

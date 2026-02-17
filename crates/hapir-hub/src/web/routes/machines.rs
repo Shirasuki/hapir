@@ -23,8 +23,7 @@ async fn list_machines(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
 ) -> (StatusCode, Json<Value>) {
-    let engine = state.sync_engine.lock().await;
-    let machines = engine.get_online_machines_by_namespace(&auth.namespace);
+    let machines = state.sync_engine.get_online_machines_by_namespace(&auth.namespace).await;
     (StatusCode::OK, Json(json!({ "machines": machines })))
 }
 
@@ -52,11 +51,9 @@ async fn spawn_machine(
         );
     }
 
-    let engine = state.sync_engine.lock().await;
-
     // Verify machine exists and belongs to this namespace
-    let machine = match engine.get_machine(&machine_id) {
-        Some(m) => m.clone(),
+    let machine = match state.sync_engine.get_machine(&machine_id).await {
+        Some(m) => m,
         None => {
             return (
                 StatusCode::NOT_FOUND,
@@ -93,7 +90,7 @@ async fn spawn_machine(
         }
     }
 
-    let result = engine
+    let result = state.sync_engine
         .spawn_session(
             &machine_id,
             &body.directory,
@@ -144,11 +141,9 @@ async fn paths_exists(
         );
     }
 
-    let engine = state.sync_engine.lock().await;
-
     // Verify machine exists and belongs to this namespace
-    let machine = match engine.get_machine(&machine_id) {
-        Some(m) => m.clone(),
+    let machine = match state.sync_engine.get_machine(&machine_id).await {
+        Some(m) => m,
         None => {
             return (
                 StatusCode::NOT_FOUND,
@@ -183,7 +178,7 @@ async fn paths_exists(
         return (StatusCode::OK, Json(json!({ "exists": {} })));
     }
 
-    match engine.check_paths_exist(&machine_id, &unique_paths).await {
+    match state.sync_engine.check_paths_exist(&machine_id, &unique_paths).await {
         Ok(exists) => (StatusCode::OK, Json(json!({ "exists": exists }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

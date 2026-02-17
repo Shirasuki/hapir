@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal::unix::SignalKind;
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Notify, RwLock};
 use tracing::info;
 
 use config::Configuration;
@@ -49,7 +49,7 @@ pub async fn run_hub() -> anyhow::Result<()> {
     let conn_mgr = Arc::new(ConnectionManager::new());
 
     // Create SyncEngine
-    let sync_engine = Arc::new(Mutex::new(SyncEngine::new(store.clone(), conn_mgr.clone())));
+    let sync_engine = Arc::new(SyncEngine::new(store.clone(), conn_mgr.clone()));
 
     // Set up notification channels and hub
     let notifications::setup::NotificationSetup {
@@ -95,8 +95,7 @@ pub async fn run_hub() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         loop {
             interval.tick().await;
-            // 定时清理过期的机器和终端会话
-            sync_for_expire.lock().await.expire_inactive();
+            sync_for_expire.expire_inactive().await;
         }
     });
 
@@ -148,9 +147,8 @@ pub async fn run_hub() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
-            let mut engine = sync_for_heartbeat.lock().await;
-            if engine.sse_manager().connection_count() > 0 {
-                engine.sse_manager_mut().send_heartbeats();
+            if sync_for_heartbeat.sse_connection_count() > 0 {
+                sync_for_heartbeat.send_heartbeats();
             }
         }
     });

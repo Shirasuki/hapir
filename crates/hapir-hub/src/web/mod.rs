@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use axum::http::HeaderValue;
 use axum::Router;
-use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 
 use hapir_shared::version::PROTOCOL_VERSION;
@@ -20,7 +19,7 @@ use crate::sync::SyncEngine;
 pub struct AppState {
     pub jwt_secret: Vec<u8>,
     pub cli_api_token: String,
-    pub sync_engine: Arc<Mutex<SyncEngine>>,
+    pub sync_engine: Arc<SyncEngine>,
     pub store: Arc<Store>,
     pub vapid_public_key: Option<String>,
     pub telegram_bot_token: Option<String>,

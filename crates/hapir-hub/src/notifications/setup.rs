@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
-
 use crate::config::settings::VapidKeys;
 use crate::config::Configuration;
 use crate::notifications::notification_hub::NotificationHub;
@@ -20,7 +18,7 @@ pub fn build(
     config: &Configuration,
     vapid_keys: Option<VapidKeys>,
     store: Arc<Store>,
-    sync_engine: Arc<Mutex<SyncEngine>>,
+    sync_engine: Arc<SyncEngine>,
 ) -> NotificationSetup {
     let mut channels: Vec<Arc<dyn NotificationChannel>> = Vec::new();
 

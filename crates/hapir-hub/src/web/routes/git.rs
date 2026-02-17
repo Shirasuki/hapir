@@ -27,9 +27,10 @@ async fn resolve_session_and_path(
     auth: &AuthContext,
     raw_id: &str,
 ) -> Result<(String, String), (StatusCode, Json<Value>)> {
-    let mut engine = state.sync_engine.lock().await;
-    let (session_id, session) = engine
+    let (session_id, session) = state
+        .sync_engine
         .resolve_session_access(raw_id, &auth.namespace)
+        .await
         .map_err(|reason| {
             if reason == "access-denied" {
                 (
@@ -79,8 +80,7 @@ async fn git_status(
         Err(e) => return e,
     };
 
-    let engine = state.sync_engine.lock().await;
-    match engine.get_git_status(&session_id, Some(&session_path)).await {
+    match state.sync_engine.get_git_status(&session_id, Some(&session_path)).await {
         Ok(resp) => {
             let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({"success": false}));
             (StatusCode::OK, Json(val))
@@ -107,8 +107,8 @@ async fn git_diff_numstat(
 
     let staged = parse_bool_param(query.staged.as_deref());
 
-    let engine = state.sync_engine.lock().await;
-    match engine
+    match state
+        .sync_engine
         .get_git_diff_numstat(&session_id, Some(&session_path), staged)
         .await
     {
@@ -156,8 +156,8 @@ async fn git_diff_file(
 
     let staged = parse_bool_param(query.staged.as_deref());
 
-    let engine = state.sync_engine.lock().await;
-    match engine
+    match state
+        .sync_engine
         .get_git_diff_file(&session_id, Some(&session_path), &query.path, staged)
         .await
     {
@@ -202,8 +202,7 @@ async fn get_file(
         Err(e) => return e,
     };
 
-    let engine = state.sync_engine.lock().await;
-    match engine.read_session_file(&session_id, &query.path).await {
+    match state.sync_engine.read_session_file(&session_id, &query.path).await {
         Ok(resp) => {
             let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({"success": false}));
             (StatusCode::OK, Json(val))
@@ -238,8 +237,8 @@ async fn list_files(
         args.push(format!("*{search_query}*"));
     }
 
-    let engine = state.sync_engine.lock().await;
-    match engine
+    match state
+        .sync_engine
         .run_ripgrep(&session_id, &args, Some(&session_path))
         .await
     {
@@ -301,8 +300,7 @@ async fn list_directory(
 
     let path = query.path.as_deref().unwrap_or("");
 
-    let engine = state.sync_engine.lock().await;
-    match engine.list_directory(&session_id, path).await {
+    match state.sync_engine.list_directory(&session_id, path).await {
         Ok(resp) => {
             let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({"success": false}));
             (StatusCode::OK, Json(val))

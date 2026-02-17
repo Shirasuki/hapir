@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use crate::store::Store;
@@ -25,7 +25,7 @@ pub async fn handle_terminal_event(
     namespace: &str,
     event: &str,
     data: Value,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
     terminal_registry: &Arc<RwLock<TerminalRegistry>>,
@@ -62,7 +62,7 @@ async fn handle_terminal_create(
     conn_id: &str,
     namespace: &str,
     data: Value,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     _store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
     terminal_registry: &Arc<RwLock<TerminalRegistry>>,
@@ -75,11 +75,8 @@ async fn handle_terminal_create(
     let rows = data.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u32;
 
     // Check session is active
-    let session_ok = {
-        let mut engine = sync_engine.lock().await;
-        engine.get_session_by_namespace(session_id, namespace)
-            .is_some_and(|s| s.active)
-    };
+    let session_ok = sync_engine.get_session_by_namespace(session_id, namespace).await
+        .is_some_and(|s| s.active);
     if !session_ok {
         let err = serde_json::json!({
             "event": "terminal:error",

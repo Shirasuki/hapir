@@ -3,7 +3,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use hapir_shared::schemas::Session;
@@ -21,7 +20,7 @@ use super::session_view::{create_notification_keyboard, format_session_notificat
 
 pub struct HappyBot {
     api: Arc<TelegramApi>,
-    sync_engine: Arc<Mutex<SyncEngine>>,
+    sync_engine: Arc<SyncEngine>,
     store: Arc<Store>,
     public_url: String,
     running: Arc<AtomicBool>,
@@ -30,7 +29,7 @@ pub struct HappyBot {
 impl HappyBot {
     pub fn new(
         bot_token: &str,
-        sync_engine: Arc<Mutex<SyncEngine>>,
+        sync_engine: Arc<SyncEngine>,
         store: Arc<Store>,
         public_url: String,
     ) -> Self {

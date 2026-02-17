@@ -63,7 +63,7 @@ impl SessionCache {
         session_id: &str,
         namespace: &str,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) -> Result<(String, Session), &'static str> {
         let session = self
             .sessions
@@ -93,7 +93,7 @@ impl SessionCache {
         agent_state: Option<&Value>,
         namespace: &str,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) -> anyhow::Result<Session> {
         use crate::store::sessions;
         let stored = sessions::get_or_create_session(&store.conn(), tag, metadata, agent_state, namespace)?;
@@ -105,7 +105,7 @@ impl SessionCache {
         &mut self,
         session_id: &str,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) -> Option<Session> {
         use crate::store::{sessions, messages};
 
@@ -217,7 +217,7 @@ impl SessionCache {
 
     // PLACEHOLDER_SESSION_CACHE_PART2
 
-    pub fn reload_all(&mut self, store: &Store, publisher: &mut EventPublisher) {
+    pub fn reload_all(&mut self, store: &Store, publisher: &EventPublisher) {
         use crate::store::sessions;
         let all = sessions::get_sessions(&store.conn());
         for s in all {
@@ -233,7 +233,7 @@ impl SessionCache {
         permission_mode: Option<PermissionMode>,
         model_mode: Option<ModelMode>,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) {
         let t = match clamp_alive_time(time) {
             Some(t) => t,
@@ -293,7 +293,7 @@ impl SessionCache {
         sid: &str,
         time: i64,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) {
         let t = clamp_alive_time(time).unwrap_or_else(now_millis);
 
@@ -320,7 +320,7 @@ impl SessionCache {
         });
     }
 
-    pub fn expire_inactive(&mut self, publisher: &mut EventPublisher) {
+    pub fn expire_inactive(&mut self, publisher: &EventPublisher) {
         let now = now_millis();
         let expired: Vec<String> = self
             .sessions
@@ -352,7 +352,7 @@ impl SessionCache {
         permission_mode: Option<PermissionMode>,
         model_mode: Option<ModelMode>,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) {
         if self.sessions.get(session_id).is_none() {
             self.refresh_session(session_id, store, publisher);
@@ -382,7 +382,7 @@ impl SessionCache {
         session_id: &str,
         name: &str,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) -> anyhow::Result<()> {
         use crate::store::sessions;
 
@@ -459,7 +459,7 @@ impl SessionCache {
         &mut self,
         session_id: &str,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) -> anyhow::Result<()> {
         use crate::store::sessions;
 
@@ -496,7 +496,7 @@ impl SessionCache {
         new_session_id: &str,
         namespace: &str,
         store: &Store,
-        publisher: &mut EventPublisher,
+        publisher: &EventPublisher,
     ) -> anyhow::Result<()> {
         use crate::store::{sessions, messages};
 

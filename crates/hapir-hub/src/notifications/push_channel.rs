@@ -3,7 +3,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use hapir_shared::schemas::{Session, SyncEvent, ToastData};
-use tokio::sync::Mutex;
 use crate::sync::SyncEngine;
 
 use super::push_service::{PushData, PushPayload, PushService};
@@ -29,7 +28,7 @@ pub trait NotificationChannel: Send + Sync {
 /// with SSE toast as a preferred fast path when a visible connection exists.
 pub struct PushNotificationChannel {
     push_service: Arc<PushService>,
-    sync_engine: Arc<Mutex<SyncEngine>>,
+    sync_engine: Arc<SyncEngine>,
     #[allow(dead_code)]
     app_url: String,
 }
@@ -37,7 +36,7 @@ pub struct PushNotificationChannel {
 impl PushNotificationChannel {
     pub fn new(
         push_service: Arc<PushService>,
-        sync_engine: Arc<Mutex<SyncEngine>>,
+        sync_engine: Arc<SyncEngine>,
         app_url: String,
     ) -> Self {
         Self {
@@ -61,9 +60,7 @@ impl PushNotificationChannel {
         session_id: &str,
         url: &str,
     ) -> usize {
-        let mut engine = self.sync_engine.lock().await;
-
-        if !engine.sse_manager().visibility().has_visible_connection(namespace) {
+        if !self.sync_engine.has_visible_sse_connection(namespace) {
             return 0;
         }
 
@@ -77,7 +74,7 @@ impl PushNotificationChannel {
             },
         };
 
-        engine.sse_manager_mut().send_toast(namespace, &toast_event)
+        self.sync_engine.send_sse_toast(namespace, &toast_event)
     }
 }
 

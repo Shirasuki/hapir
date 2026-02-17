@@ -57,10 +57,8 @@ async fn approve_permission(
         }
     };
 
-    let mut engine = state.sync_engine.lock().await;
-
     // Verify session access and require active
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -120,7 +118,7 @@ async fn approve_permission(
         PermissionDecision::Abort => "abort",
     });
 
-    match engine
+    match state.sync_engine
         .approve_permission(
             &session_id,
             &request_id,
@@ -157,10 +155,8 @@ async fn deny_permission(
         }
     };
 
-    let mut engine = state.sync_engine.lock().await;
-
     // Verify session access and require active
-    let (session_id, session) = match engine.resolve_session_access(&id, &auth.namespace) {
+    let (session_id, session) = match state.sync_engine.resolve_session_access(&id, &auth.namespace).await {
         Ok(pair) => pair,
         Err("access-denied") => {
             return (
@@ -204,7 +200,7 @@ async fn deny_permission(
         PermissionDecision::Abort => "abort",
     });
 
-    match engine
+    match state.sync_engine
         .deny_permission(&session_id, &request_id, decision_str)
         .await
     {

@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use hapir_shared::schemas::SyncEvent;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{error, trace, warn};
 
@@ -51,11 +50,8 @@ impl NotificationHub {
     ///
     /// Subscribes to `SyncEngine`'s broadcast channel and dispatches
     /// notifications based on incoming events.
-    pub async fn start(self: Arc<Self>, sync_engine: Arc<Mutex<SyncEngine>>) {
-        let mut rx = {
-            let engine = sync_engine.lock().await;
-            engine.subscribe()
-        };
+    pub async fn start(self: Arc<Self>, sync_engine: Arc<SyncEngine>) {
+        let mut rx = sync_engine.subscribe();
 
         let hub = self.clone();
         let engine = sync_engine.clone();
@@ -78,14 +74,11 @@ impl NotificationHub {
         });
     }
 
-    async fn handle_sync_event(&self, event: &SyncEvent, sync_engine: &Arc<Mutex<SyncEngine>>) {
+    async fn handle_sync_event(&self, event: &SyncEvent, sync_engine: &Arc<SyncEngine>) {
         match event {
             SyncEvent::SessionUpdated { session_id, .. }
             | SyncEvent::SessionAdded { session_id, .. } => {
-                let session = {
-                    let mut engine = sync_engine.lock().await;
-                    engine.get_session(session_id)
-                };
+                let session = sync_engine.get_session(session_id).await;
                 let Some(session) = session else {
                     self.clear_session_state(session_id);
                     return;
@@ -129,7 +122,7 @@ impl NotificationHub {
     fn check_for_permission_notification(
         &self,
         session: &hapir_shared::schemas::Session,
-        sync_engine: &Arc<Mutex<SyncEngine>>,
+        sync_engine: &Arc<SyncEngine>,
     ) {
         let requests = match session
             .agent_state
@@ -182,10 +175,7 @@ impl NotificationHub {
             tokio::time::sleep(std::time::Duration::from_millis(debounce_ms)).await;
 
             // Re-fetch the session to ensure it's still valid
-            let session = {
-                let mut engine_guard = engine.lock().await;
-                engine_guard.get_session(&session_id)
-            };
+            let session = engine.get_session(&session_id).await;
 
             let Some(session) = session else {
                 return;
@@ -218,12 +208,9 @@ impl NotificationHub {
     async fn send_ready_notification(
         &self,
         session_id: &str,
-        sync_engine: &Arc<Mutex<SyncEngine>>,
+        sync_engine: &Arc<SyncEngine>,
     ) {
-        let session = {
-            let mut engine = sync_engine.lock().await;
-            engine.get_session(session_id)
-        };
+        let session = sync_engine.get_session(session_id).await;
 
         let Some(session) = session else {
             return;

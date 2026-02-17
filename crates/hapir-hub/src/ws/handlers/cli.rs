@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use crate::store::Store;
@@ -70,7 +70,7 @@ pub async fn handle_cli_event(
     event: &str,
     data: Value,
     _request_id: Option<&str>,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
     terminal_registry: &Arc<RwLock<TerminalRegistry>>,
@@ -134,7 +134,7 @@ async fn handle_message(
     conn_id: &str,
     namespace: &str,
     data: Value,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
 ) -> Option<Value> {
@@ -170,12 +170,11 @@ async fn handle_message(
         if let Ok(todos_val) = serde_json::to_value(todos) {
             use crate::store::sessions;
             if sessions::set_session_todos(&store.conn(), sid, Some(&todos_val), msg.created_at, namespace) {
-                let mut engine = sync_engine.lock().await;
-                engine.handle_realtime_event(hapir_shared::schemas::SyncEvent::SessionUpdated {
+                sync_engine.handle_realtime_event(hapir_shared::schemas::SyncEvent::SessionUpdated {
                     session_id: sid.to_string(),
                     namespace: None,
                     data: Some(serde_json::json!({"sid": sid})),
-                });
+                }).await;
             }
         }
     }
@@ -204,20 +203,17 @@ async fn handle_message(
     conn_mgr.broadcast_to_session(sid, &update_str, Some(conn_id)).await;
 
     // Emit to sync engine
-    {
-        let mut engine = sync_engine.lock().await;
-        engine.handle_realtime_event(hapir_shared::schemas::SyncEvent::MessageReceived {
-            session_id: sid.to_string(),
-            namespace: None,
-            message: hapir_shared::schemas::DecryptedMessage {
-                id: msg.id,
-                seq: Some(msg.seq as f64),
-                local_id: msg.local_id,
-                content: msg.content.unwrap_or(Value::Null),
-                created_at: msg.created_at as f64,
-            },
-        });
-    }
+    sync_engine.handle_realtime_event(hapir_shared::schemas::SyncEvent::MessageReceived {
+        session_id: sid.to_string(),
+        namespace: None,
+        message: hapir_shared::schemas::DecryptedMessage {
+            id: msg.id,
+            seq: Some(msg.seq as f64),
+            local_id: msg.local_id,
+            content: msg.content.unwrap_or(Value::Null),
+            created_at: msg.created_at as f64,
+        },
+    }).await;
 
     None
 }
@@ -226,7 +222,7 @@ async fn handle_update_metadata(
     namespace: &str,
     data: Value,
     store: &Arc<Store>,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
 ) -> Option<Value> {
@@ -266,13 +262,13 @@ async fn handle_update_metadata(
                 }
             });
             conn_mgr.broadcast_to_session(sid, &update.to_string(), Some(conn_id)).await;
-            sync_engine.lock().await.handle_realtime_event(
+            sync_engine.handle_realtime_event(
                 hapir_shared::schemas::SyncEvent::SessionUpdated {
                     session_id: sid.to_string(),
                     namespace: None,
                     data: Some(serde_json::json!({"sid": sid})),
                 },
-            );
+            ).await;
             serde_json::json!({"result": "success", "version": version, "metadata": value})
         }
         VersionedUpdateResult::VersionMismatch { version, value } => {
@@ -290,7 +286,7 @@ async fn handle_update_state(
     namespace: &str,
     data: Value,
     store: &Arc<Store>,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
 ) -> Option<Value> {
@@ -328,13 +324,13 @@ async fn handle_update_state(
                 }
             });
             conn_mgr.broadcast_to_session(sid, &update.to_string(), Some(conn_id)).await;
-            sync_engine.lock().await.handle_realtime_event(
+            sync_engine.handle_realtime_event(
                 hapir_shared::schemas::SyncEvent::SessionUpdated {
                     session_id: sid.to_string(),
                     namespace: None,
                     data: Some(serde_json::json!({"sid": sid})),
                 },
-            );
+            ).await;
             serde_json::json!({"result": "success", "version": version, "agentState": value})
         }
         VersionedUpdateResult::VersionMismatch { version, value } => {
@@ -353,7 +349,7 @@ async fn handle_session_alive(
     namespace: &str,
     data: Value,
     store: &Arc<Store>,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
     let sid = match data.get("sid").and_then(|v| v.as_str()) {
@@ -377,7 +373,7 @@ async fn handle_session_alive(
     let model_mode = data.get("modelMode")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    sync_engine.lock().await.handle_session_alive(&sid, time, thinking, permission_mode, model_mode);
+    sync_engine.handle_session_alive(&sid, time, thinking, permission_mode, model_mode).await;
 }
 
 async fn handle_session_end(
@@ -385,7 +381,7 @@ async fn handle_session_end(
     namespace: &str,
     data: Value,
     store: &Arc<Store>,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
     let sid = match data.get("sid").and_then(|v| v.as_str()) {
@@ -402,7 +398,7 @@ async fn handle_session_end(
         return;
     }
 
-    sync_engine.lock().await.handle_session_end(&sid, time);
+    sync_engine.handle_session_end(&sid, time).await;
 }
 
 async fn handle_machine_alive(
@@ -410,7 +406,7 @@ async fn handle_machine_alive(
     namespace: &str,
     data: Value,
     store: &Arc<Store>,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
     let machine_id = match data.get("machineId").and_then(|v| v.as_str()) {
@@ -427,14 +423,14 @@ async fn handle_machine_alive(
         return;
     }
 
-    sync_engine.lock().await.handle_machine_alive(&machine_id, time);
+    sync_engine.handle_machine_alive(&machine_id, time).await;
 }
 
 async fn handle_machine_update_metadata(
     namespace: &str,
     data: Value,
     store: &Arc<Store>,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
 ) -> Option<Value> {
@@ -470,13 +466,13 @@ async fn handle_machine_update_metadata(
                 }
             });
             conn_mgr.broadcast_to_machine(mid, &update.to_string(), Some(conn_id)).await;
-            sync_engine.lock().await.handle_realtime_event(
+            sync_engine.handle_realtime_event(
                 hapir_shared::schemas::SyncEvent::MachineUpdated {
                     machine_id: mid.to_string(),
                     namespace: None,
                     data: Some(serde_json::json!({"id": mid})),
                 },
-            );
+            ).await;
             serde_json::json!({"result": "success", "version": version, "metadata": value})
         }
         VersionedUpdateResult::VersionMismatch { version, value } => {
@@ -494,7 +490,7 @@ async fn handle_machine_update_state(
     namespace: &str,
     data: Value,
     store: &Arc<Store>,
-    sync_engine: &Arc<Mutex<SyncEngine>>,
+    sync_engine: &Arc<SyncEngine>,
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
 ) -> Option<Value> {
@@ -530,13 +526,13 @@ async fn handle_machine_update_state(
                 }
             });
             conn_mgr.broadcast_to_machine(mid, &update.to_string(), Some(conn_id)).await;
-            sync_engine.lock().await.handle_realtime_event(
+            sync_engine.handle_realtime_event(
                 hapir_shared::schemas::SyncEvent::MachineUpdated {
                     machine_id: mid.to_string(),
                     namespace: None,
                     data: Some(serde_json::json!({"id": mid})),
                 },
-            );
+            ).await;
             serde_json::json!({"result": "success", "version": version, "runnerState": value})
         }
         VersionedUpdateResult::VersionMismatch { version, value } => {
