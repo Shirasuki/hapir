@@ -78,6 +78,7 @@ pub struct RpcListDirectoryResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SpawnSessionResult {
     #[serde(rename = "type")]
     pub result_type: String,
