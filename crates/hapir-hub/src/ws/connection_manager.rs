@@ -6,6 +6,15 @@ use tokio::sync::{mpsc, oneshot, RwLock};
 use crate::sync::rpc_gateway::RpcTransport;
 use super::rpc_registry::RpcRegistry;
 
+/// Distinguishes why an RPC call could not be dispatched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpcCallError {
+    /// No handler has been registered for this method (yet).
+    NotRegistered,
+    /// Handler exists but the underlying connection is gone.
+    SendFailed,
+}
+
 /// A message to be sent to a WebSocket connection.
 #[derive(Debug, Clone)]
 pub enum WsOutMessage {
@@ -185,7 +194,7 @@ impl ConnectionManager {
     // --- RPC ---
 
     pub async fn rpc_register(&self, conn_id: &str, method: &str) {
-        tracing::debug!(conn_id, method, "RPC method registered");
+        tracing::info!(conn_id, method, "RPC method registered");
         self.rpc_registry.write().await.register(conn_id, method);
     }
 
@@ -193,12 +202,19 @@ impl ConnectionManager {
         self.rpc_registry.write().await.unregister(conn_id, method);
     }
 
+    /// Check whether a handler is registered for the given method.
+    pub async fn has_rpc_handler(&self, method: &str) -> bool {
+        self.rpc_registry.read().await.get_conn_id_for_method(method).is_some()
+    }
+
     /// Initiate an RPC call: find the connection for the method, send request, return receiver.
+    /// Returns `Err(RpcCallError::NotRegistered)` when no handler is registered,
+    /// or `Err(RpcCallError::SendFailed)` when the handler exists but the send fails.
     pub async fn rpc_call_internal(
         &self,
         method: &str,
         params: Value,
-    ) -> Option<oneshot::Receiver<Result<Value, String>>> {
+    ) -> Result<oneshot::Receiver<Result<Value, String>>, RpcCallError> {
         let conn_id = {
             let reg = self.rpc_registry.read().await;
             match reg.get_conn_id_for_method(method) {
@@ -207,13 +223,13 @@ impl ConnectionManager {
                     id.to_string()
                 }
                 None => {
-                    tracing::warn!(method, "RPC method not found in registry");
-                    return None;
+                    return Err(RpcCallError::NotRegistered);
                 }
             }
         };
 
-        let tx = self.get_connection_tx(&conn_id).await?;
+        let tx = self.get_connection_tx(&conn_id).await
+            .ok_or(RpcCallError::SendFailed)?;
 
         let request_id = uuid::Uuid::new_v4().to_string();
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -234,12 +250,10 @@ impl ConnectionManager {
 
         if tx.send(WsOutMessage::Text(msg.to_string())).is_err() {
             self.pending_rpcs.write().await.remove(&request_id);
-            return None;
+            return Err(RpcCallError::SendFailed);
         }
 
-        // We handle timeout at the caller level (rpc_gateway has 30s timeout)
-
-        Some(resp_rx)
+        Ok(resp_rx)
     }
 
     /// Handle an RPC response (ack) from a connection.
@@ -256,22 +270,25 @@ impl RpcTransport for ConnectionManager {
         &self,
         method: &str,
         params: Value,
-    ) -> Option<oneshot::Receiver<Result<Value, String>>> {
-        // We need to block on the async method from a sync context.
-        // This is called from an async context (RpcGateway is async), so we use
-        // tokio::task::block_in_place or restructure. Instead, we'll use a
-        // try_read approach with futures.
-        //
-        // Actually, RpcTransport::rpc_call is called from async code (RpcGateway::rpc_call is async).
-        // But the trait is sync. We need a sync bridge.
-        // The simplest approach: use tokio::runtime::Handle to spawn a blocking call.
-
-        let handle = tokio::runtime::Handle::try_current().ok()?;
+    ) -> Result<oneshot::Receiver<Result<Value, String>>, RpcCallError> {
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| RpcCallError::SendFailed)?;
         let method = method.to_string();
 
         // Use block_in_place since we're already in a tokio context
         tokio::task::block_in_place(|| {
             handle.block_on(self.rpc_call_internal(&method, params))
+        })
+    }
+
+    fn has_rpc_handler(&self, method: &str) -> bool {
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+        let method = method.to_string();
+        tokio::task::block_in_place(|| {
+            handle.block_on(self.has_rpc_handler(&method))
         })
     }
 }

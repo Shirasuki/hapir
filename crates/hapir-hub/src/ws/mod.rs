@@ -224,7 +224,12 @@ async fn handle_cli_ws(
         };
 
         let event = match parsed.get("event").and_then(|v| v.as_str()) {
-            Some(e) => e.to_string(),
+            Some(e) => {
+                if e == "rpc-register" {
+                    info!(conn_id = %conn_id, event = %e, data = ?parsed.get("data"), "CLI WS received rpc-register");
+                }
+                e.to_string()
+            }
             None => {
                 // No event field — treat as generic ack if it has an id
                 if let Some(id) = parsed.get("id").and_then(|v| v.as_str()) {
@@ -281,7 +286,16 @@ async fn handle_cli_ws(
         info!(conn_id = %conn_id, machine_id = %mid, "Runner WebSocket 已断开");
         // Mark machine offline immediately on disconnect
         state.sync_engine.mark_machine_offline(mid).await;
-    } else {
+    }
+    if let Some(ref sid) = session_id {
+        info!(conn_id = %conn_id, session_id = %sid, "Session WebSocket 已断开");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        state.sync_engine.handle_session_end(sid, now).await;
+    }
+    if machine_id.is_none() && session_id.is_none() {
         debug!(conn_id = %conn_id, "CLI WebSocket disconnected");
     }
     handlers::terminal::cleanup_cli_disconnect(&conn_id, &state.conn_mgr, &state.terminal_registry)

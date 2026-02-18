@@ -3,6 +3,7 @@ pub mod directories;
 pub mod files;
 pub mod git;
 pub mod path_security;
+pub mod plugins;
 pub mod ripgrep;
 pub mod skills;
 pub mod slash_commands;

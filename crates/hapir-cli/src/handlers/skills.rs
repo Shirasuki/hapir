@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use tracing::debug;
 
+use super::plugins::get_installed_plugins;
 use crate::rpc::RpcHandlerManager;
 
 fn skills_root() -> PathBuf {
@@ -90,18 +91,33 @@ async fn list_skill_dirs(root: &Path) -> Vec<PathBuf> {
     result
 }
 
-async fn list_skills_impl() -> Vec<Value> {
-    let root = skills_root();
-    let dirs = list_skill_dirs(&root).await;
+async fn scan_skills_from_dirs(dirs: &[PathBuf]) -> Vec<Value> {
     let mut skills = vec![];
     for dir in dirs {
         let skill_file = dir.join("SKILL.md");
         if let Ok(content) = tokio::fs::read_to_string(&skill_file).await
-            && let Some(summary) = extract_skill_summary(&dir, &content)
+            && let Some(summary) = extract_skill_summary(dir, &content)
         {
             skills.push(summary);
         }
     }
+    skills
+}
+
+async fn list_skills_impl() -> Vec<Value> {
+    let root = skills_root();
+    let codex_dirs = list_skill_dirs(&root).await;
+    let mut skills = scan_skills_from_dirs(&codex_dirs).await;
+
+    // Also scan skills from installed plugins
+    let plugins = get_installed_plugins().await;
+    for plugin in &plugins {
+        let skills_dir = plugin.install_path.join("skills");
+        let plugin_skill_dirs = list_skill_dirs(&skills_dir).await;
+        let plugin_skills = scan_skills_from_dirs(&plugin_skill_dirs).await;
+        skills.extend(plugin_skills);
+    }
+
     skills.sort_by(|a, b| {
         let an = a["name"].as_str().unwrap_or("");
         let bn = b["name"].as_str().unwrap_or("");

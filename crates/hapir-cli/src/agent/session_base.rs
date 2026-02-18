@@ -98,12 +98,10 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
             model_mode: Arc::new(Mutex::new(opts.model_mode)),
         });
 
-        // Send initial keep-alive and start interval
+        // Start keep-alive interval (first session-alive is sent by the
+        // connect task after RPC re-registration to guarantee ordering)
         let s = session.clone();
         let handle = tokio::spawn(async move {
-            // Initial keep-alive
-            s.send_keep_alive().await;
-
             let mut interval = time::interval(Duration::from_secs(2));
             interval.tick().await; // skip first immediate tick
             loop {

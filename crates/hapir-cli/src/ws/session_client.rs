@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use hapir_shared::schemas::{Metadata, Session};
 
@@ -91,6 +91,20 @@ impl WsSessionClient {
             });
         }).await;
 
+        // Register initial session-alive as a connect message so it is sent
+        // after all RPC handlers are re-registered on every (re)connect.
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        self.ws.add_connect_message("session-alive", json!({
+            "sid": self.session_id,
+            "time": time,
+            "thinking": false,
+            "mode": "local",
+            "runtime": "",
+        })).await;
+
         self.ws.connect().await;
     }
 
@@ -177,10 +191,10 @@ impl WsSessionClient {
         handler: impl Fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send>> + Send + Sync + 'static,
     ) {
         let scoped_method = format!("{}:{}", self.session_id, method);
-        debug!(method = %scoped_method, "registering session-scoped RPC handler");
+        info!(method = %scoped_method, "registering session-scoped RPC handler");
         self.ws.register_rpc(&scoped_method, handler).await;
         self.ws.emit("rpc-register", json!({
-            "method": format!("{}:{}", self.session_id, method),
+            "method": scoped_method,
         })).await;
     }
 

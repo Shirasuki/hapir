@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use tracing::debug;
 
+use super::plugins::get_installed_plugins;
 use crate::rpc::RpcHandlerManager;
 
 fn builtin_commands(agent: &str) -> Vec<Value> {
@@ -122,54 +123,13 @@ async fn scan_plugin_commands(agent: &str) -> Vec<Value> {
     if agent != "claude" {
         return vec![];
     }
-    let config_dir = std::env::var("CLAUDE_CONFIG_DIR")
-        .ok()
-        .or_else(|| {
-            dirs_next::home_dir().map(|h| h.join(".claude").to_string_lossy().to_string())
-        })
-        .unwrap_or_default();
-    let installed_path = PathBuf::from(&config_dir)
-        .join("plugins")
-        .join("installed_plugins.json");
 
-    let content = match tokio::fs::read_to_string(&installed_path).await {
-        Ok(c) => c,
-        Err(_) => return vec![],
-    };
-    let parsed: Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return vec![],
-    };
-    let plugins = match parsed.get("plugins").and_then(|v| v.as_object()) {
-        Some(p) => p,
-        None => return vec![],
-    };
-
+    let plugins = get_installed_plugins().await;
     let mut all = vec![];
-    for (plugin_key, installations) in plugins {
-        let last_at = plugin_key.rfind('@').unwrap_or(plugin_key.len());
-        let plugin_name = if last_at > 0 {
-            &plugin_key[..last_at]
-        } else {
-            plugin_key
-        };
-        let installs = match installations.as_array() {
-            Some(a) => a,
-            None => continue,
-        };
-        let best = installs.iter().max_by_key(|i| {
-            i.get("lastUpdated")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-        });
-        if let Some(install) = best
-            && let Some(install_path) = install.get("installPath").and_then(|v| v.as_str())
-        {
-            let commands_dir = PathBuf::from(install_path).join("commands");
-            let cmds =
-                scan_commands_dir(&commands_dir, "plugin", Some(plugin_name)).await;
-            all.extend(cmds);
-        }
+    for plugin in &plugins {
+        let commands_dir = plugin.install_path.join("commands");
+        let cmds = scan_commands_dir(&commands_dir, "plugin", Some(&plugin.name)).await;
+        all.extend(cmds);
     }
     all.sort_by(|a, b| {
         let an = a["name"].as_str().unwrap_or("");

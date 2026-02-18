@@ -155,7 +155,6 @@ pub async fn bootstrap_session(
         api.token(),
         &session_info,
     ));
-    ws_client.connect().await;
 
     Ok(SessionBootstrapResult {
         api,

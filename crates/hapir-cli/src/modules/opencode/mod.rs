@@ -302,6 +302,9 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         })
         .await;
 
+    // All RPC handlers registered — now connect the WebSocket.
+    ws_client.connect().await;
+
     // Enter the main local/remote loop
     let sb_for_local = session_base.clone();
     let sb_for_remote = session_base.clone();

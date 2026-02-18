@@ -87,6 +87,10 @@ pub struct WsClient {
     /// Last time we received any data (epoch ms, lock-free)
     last_activity: Arc<AtomicU64>,
 
+    /// Messages to send on every (re)connect, after RPC re-registration.
+    /// Pre-serialized JSON strings.
+    connect_messages: Arc<Mutex<Vec<String>>>,
+
     /// Connection callbacks
     on_connect: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
     on_disconnect: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
@@ -107,6 +111,7 @@ impl WsClient {
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             has_connected_once: Arc::new(AtomicBool::new(false)),
             last_activity: Arc::new(AtomicU64::new(0)),
+            connect_messages: Arc::new(Mutex::new(Vec::new())),
             on_connect: Arc::new(Mutex::new(None)),
             on_disconnect: Arc::new(Mutex::new(None)),
         }
@@ -124,6 +129,15 @@ impl WsClient {
         handler: impl Fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send>> + Send + Sync + 'static,
     ) {
         self.rpc_handlers.write().await.insert(method.into(), Arc::new(handler));
+    }
+
+    /// Register a message to be sent on every (re)connect, after RPC re-registration.
+    /// The message is constructed from an event name and data payload.
+    pub async fn add_connect_message(&self, event: impl Into<String>, data: Value) {
+        let req = WsRequest::fire(event, data);
+        if let Ok(json) = serde_json::to_string(&req) {
+            self.connect_messages.lock().await.push(json);
+        }
     }
 
     /// Set connection callback.
@@ -146,7 +160,10 @@ impl WsClient {
             Err(_) => return,
         };
 
-        if let Some(tx) = self.tx.lock().await.as_ref() {
+        // Hold tx lock while checking and potentially enqueueing to outbox.
+        // This prevents a race with the connect task's flush-under-lock.
+        let tx_guard = self.tx.lock().await;
+        if let Some(tx) = tx_guard.as_ref() {
             let _ = tx.send(Message::Text(json.into()));
         } else {
             self.outbox.lock().await.enqueue(&req.event, &json);
@@ -194,6 +211,7 @@ impl WsClient {
         let last_activity = self.last_activity.clone();
         let on_connect = self.on_connect.clone();
         let on_disconnect = self.on_disconnect.clone();
+        let connect_messages = self.connect_messages.clone();
 
         tokio::spawn(async move {
             let mut backoff = Duration::from_secs(1);
@@ -254,13 +272,47 @@ impl WsClient {
 
                 let (mut write, mut read) = ws_stream.split();
                 let (send_tx, mut send_rx) = mpsc::unbounded_channel::<Message>();
-                *tx_holder.lock().await = Some(send_tx.clone());
 
-                // Flush outbox
+                // Hold tx lock while flushing outbox and re-registering RPC handlers.
+                // This prevents a race where emit() checks tx (None), then we set tx
+                // and flush, then emit() enqueues to the already-flushed outbox.
                 {
-                    let mut ob = outbox.lock().await;
-                    for msg in ob.drain() {
-                        let _ = send_tx.send(Message::Text(msg.into()));
+                    let mut tx_guard = tx_holder.lock().await;
+                    *tx_guard = Some(send_tx.clone());
+
+                    // Flush outbox
+                    {
+                        let mut ob = outbox.lock().await;
+                        for msg in ob.drain() {
+                            let _ = send_tx.send(Message::Text(msg.into()));
+                        }
+                    }
+
+                    // Re-register all RPC handlers with the hub so it knows
+                    // which methods this connection handles.
+                    {
+                        let handlers = rpc_handlers.read().await;
+                        for method in handlers.keys() {
+                            let req = WsRequest::fire(
+                                "rpc-register",
+                                serde_json::json!({"method": method}),
+                            );
+                            if let Ok(json) = serde_json::to_string(&req) {
+                                let _ = send_tx.send(Message::Text(json.into()));
+                            }
+                        }
+                        if !handlers.is_empty() {
+                            info!(count = handlers.len(), "re-registered RPC handlers on connect");
+                        }
+                    }
+
+                    // Send connect messages (e.g. session-alive) after RPC registration
+                    // to guarantee the hub has all handlers before it sees the session online.
+                    {
+                        let msgs = connect_messages.lock().await;
+                        for msg in msgs.iter() {
+                            let _ = send_tx.send(Message::Text(msg.clone().into()));
+                        }
                     }
                 }
 

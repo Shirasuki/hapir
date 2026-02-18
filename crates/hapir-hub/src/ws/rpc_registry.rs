@@ -55,6 +55,11 @@ impl RpcRegistry {
     pub fn get_conn_id_for_method(&self, method: &str) -> Option<&str> {
         self.method_to_conn.get(method).map(|s| s.as_str())
     }
+
+    /// Return all registered method names (for diagnostics).
+    pub fn all_methods(&self) -> Vec<&str> {
+        self.method_to_conn.keys().map(|s| s.as_str()).collect()
+    }
 }
 
 #[cfg(test)]
