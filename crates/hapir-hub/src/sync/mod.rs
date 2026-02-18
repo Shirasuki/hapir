@@ -213,7 +213,16 @@ impl SyncEngine {
         attachments: Option<&[AttachmentMetadata]>,
         sent_from: Option<&str>,
     ) -> anyhow::Result<()> {
-        MessageService::send_message(&self.store, &self.publisher, session_id, text, local_id, attachments, sent_from)
+        tracing::debug!(session_id, text_len = text.len(), "send_message: storing and dispatching");
+        MessageService::send_message(&self.store, &self.publisher, session_id, text, local_id, attachments, sent_from)?;
+
+        // Notify the session process via RPC so it can pick up the message
+        match self.rpc_gateway.send_user_message(session_id, text).await {
+            Ok(resp) => tracing::debug!(session_id, ?resp, "send_message: RPC delivered"),
+            Err(e) => tracing::warn!(session_id, error = %e, "send_message: failed to deliver via RPC"),
+        }
+
+        Ok(())
     }
 
     // --- Realtime event handling ---

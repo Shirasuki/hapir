@@ -364,6 +364,7 @@ impl WsClient {
                                             };
 
                                             if let Some(handler) = read_rpcs.read().await.get(method).cloned() {
+                                                debug!(method, "RPC request received, dispatching to handler");
                                                 let id = id.clone();
                                                 let tx = read_tx.clone();
                                                 tokio::spawn(async move {

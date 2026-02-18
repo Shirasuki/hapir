@@ -96,8 +96,13 @@ impl WsSessionClient {
 
     /// Send keep-alive.
     pub async fn keep_alive(&self, thinking: bool, mode: &str, runtime: &str) {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
         self.ws.emit("session-alive", json!({
             "sid": self.session_id,
+            "time": time,
             "thinking": thinking,
             "mode": mode,
             "runtime": runtime,
@@ -106,8 +111,13 @@ impl WsSessionClient {
 
     /// Send session end.
     pub async fn send_session_end(&self) {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
         self.ws.emit("session-end", json!({
             "sid": self.session_id,
+            "time": time,
         })).await;
     }
 
@@ -167,6 +177,7 @@ impl WsSessionClient {
         handler: impl Fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send>> + Send + Sync + 'static,
     ) {
         let scoped_method = format!("{}:{}", self.session_id, method);
+        debug!(method = %scoped_method, "registering session-scoped RPC handler");
         self.ws.register_rpc(&scoped_method, handler).await;
         self.ws.emit("rpc-register", json!({
             "method": format!("{}:{}", self.session_id, method),

@@ -259,6 +259,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
             let q = queue_for_rpc.clone();
             let mode = mode_for_rpc.clone();
             Box::pin(async move {
+                debug!("[runClaude] on-user-message RPC received: {:?}", params);
                 let message = params
                     .get("message")
                     .and_then(|v| v.as_str())

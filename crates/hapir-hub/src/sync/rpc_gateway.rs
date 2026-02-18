@@ -107,11 +107,16 @@ impl RpcGateway {
     }
 
     async fn rpc_call(&self, method: &str, params: Value) -> anyhow::Result<Value> {
+        tracing::debug!(method, "RPC call initiating");
         let rx = self
             .transport
             .rpc_call(method, params)
-            .ok_or_else(|| anyhow::anyhow!("RPC handler not registered: {method}"))?;
+            .ok_or_else(|| {
+                tracing::warn!(method, "RPC handler not registered");
+                anyhow::anyhow!("RPC handler not registered: {method}")
+            })?;
 
+        tracing::debug!(method, "RPC call dispatched, waiting for response");
         let result = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
             .await
             .map_err(|_| anyhow::anyhow!("RPC call timed out: {method}"))?
@@ -180,6 +185,12 @@ impl RpcGateway {
         self.session_rpc(session_id, "set-session-config", serde_json::json!({
             "permissionMode": permission_mode,
             "modelMode": model_mode,
+        })).await
+    }
+
+    pub async fn send_user_message(&self, session_id: &str, message: &str) -> anyhow::Result<Value> {
+        self.session_rpc(session_id, "on-user-message", serde_json::json!({
+            "message": message,
         })).await
     }
 

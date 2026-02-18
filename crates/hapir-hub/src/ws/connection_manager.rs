@@ -185,6 +185,7 @@ impl ConnectionManager {
     // --- RPC ---
 
     pub async fn rpc_register(&self, conn_id: &str, method: &str) {
+        tracing::debug!(conn_id, method, "RPC method registered");
         self.rpc_registry.write().await.register(conn_id, method);
     }
 
@@ -200,7 +201,16 @@ impl ConnectionManager {
     ) -> Option<oneshot::Receiver<Result<Value, String>>> {
         let conn_id = {
             let reg = self.rpc_registry.read().await;
-            reg.get_conn_id_for_method(method)?.to_string()
+            match reg.get_conn_id_for_method(method) {
+                Some(id) => {
+                    tracing::debug!(method, conn_id = id, "RPC method resolved to connection");
+                    id.to_string()
+                }
+                None => {
+                    tracing::warn!(method, "RPC method not found in registry");
+                    return None;
+                }
+            }
         };
 
         let tx = self.get_connection_tx(&conn_id).await?;
