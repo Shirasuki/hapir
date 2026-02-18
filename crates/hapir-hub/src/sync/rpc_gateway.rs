@@ -224,7 +224,7 @@ impl RpcGateway {
                             });
                         }
                     }
-                    let msg = obj.get("errorMessage").and_then(|v| v.as_str())
+                    let msg = obj.get("error").and_then(|v| v.as_str())
                         .unwrap_or("Unexpected spawn result");
                     return Ok(SpawnSessionResult {
                         result_type: "error".into(),

@@ -540,20 +540,24 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
                 _ => {
                     // Timeout or channel closed — remove awaiter
                     state.pid_to_awaiter.lock().await.remove(&pid);
-                    // Log stderr tail
-                    let sessions = state.sessions.lock().await;
-                    if let Some(s) = sessions.get(&session_id)
-                        && let Some(ref tail) = s.stderr_tail
-                    {
+                    // Collect stderr tail for error reporting
+                    let stderr_tail = {
+                        let sessions = state.sessions.lock().await;
+                        sessions.get(&session_id).and_then(|s| s.stderr_tail.clone())
+                    };
+                    if let Some(ref tail) = stderr_tail {
                         warn!(pid = pid, "session webhook timeout, stderr tail:\n{}", tail);
                     }
-                    drop(sessions);
                     warn!(pid = pid, session_id = %session_id, "session webhook timeout after 15s");
                     maybe_cleanup_worktree(&worktree_info, Some(pid)).await;
+                    let error_msg = match stderr_tail {
+                        Some(tail) => format!("Session webhook timeout for PID {pid}: {tail}"),
+                        None => format!("Session webhook timeout for PID {pid}"),
+                    };
                     SpawnSessionResponse {
                         r#type: "error".to_string(),
                         session_id: None,
-                        error: Some(format!("Session webhook timeout for PID {pid}")),
+                        error: Some(error_msg),
                         directory: None,
                     }
                 }

@@ -78,8 +78,13 @@ impl Configuration {
         // CLI API token: env > settings file
         if self.cli_api_token.is_empty() {
             if let Some(ref token) = settings.cli_api_token {
+                tracing::debug!("CLI_API_TOKEN loaded from settings file");
                 self.cli_api_token = token.clone();
+                // Propagate to env so child processes (e.g. spawned sessions) inherit it
+                unsafe { std::env::set_var("CLI_API_TOKEN", token) };
             }
+        } else {
+            tracing::debug!("CLI_API_TOKEN loaded from environment variable");
         }
 
         // API URL: env > settings file > default
