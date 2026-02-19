@@ -424,6 +424,9 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
         })
         .await;
 
+    // Set up terminal manager
+    let terminal_mgr = crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
+
     // All RPC handlers registered — now connect the WebSocket.
     // This ensures the hub receives all rpc-register events before session-alive.
     ws_client.connect().await;
@@ -475,6 +478,9 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
 
     // Clean up upload directory
     uploads::cleanup_upload_dir(&session_id).await;
+
+    // Close all terminals
+    terminal_mgr.close_all().await;
 
     // Cleanup lifecycle
     lifecycle.cleanup().await;

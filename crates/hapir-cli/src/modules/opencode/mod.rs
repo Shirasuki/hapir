@@ -311,6 +311,9 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         })
         .await;
 
+    // Set up terminal manager
+    let terminal_mgr = crate::terminal::setup_terminal(&ws_client, &session_id, working_directory).await;
+
     // All RPC handlers registered — now connect the WebSocket.
     ws_client.connect().await;
 
@@ -336,6 +339,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
 
     // Cleanup
     debug!("[runOpenCode] Main loop exited");
+    terminal_mgr.close_all().await;
     lifecycle.cleanup().await;
 
     if let Err(e) = loop_result {

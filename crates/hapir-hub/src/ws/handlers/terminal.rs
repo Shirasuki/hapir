@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::store::Store;
 use crate::sync::SyncEngine;
@@ -32,6 +32,7 @@ pub async fn handle_terminal_event(
     max_terminals_per_socket: usize,
     max_terminals_per_session: usize,
 ) -> Option<Value> {
+    debug!(event, conn_id, namespace, "terminal event received");
     match event {
         "terminal:create" => {
             handle_terminal_create(
@@ -69,15 +70,30 @@ async fn handle_terminal_create(
     max_per_socket: usize,
     max_per_session: usize,
 ) -> Option<Value> {
-    let session_id = data.get("sessionId").and_then(|v| v.as_str())?;
-    let terminal_id = data.get("terminalId").and_then(|v| v.as_str())?;
+    let session_id = match data.get("sessionId").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => {
+            warn!(conn_id, "terminal:create missing sessionId");
+            return None;
+        }
+    };
+    let terminal_id = match data.get("terminalId").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => {
+            warn!(conn_id, "terminal:create missing terminalId");
+            return None;
+        }
+    };
     let cols = data.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
     let rows = data.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u32;
 
+    debug!(session_id, terminal_id, cols, rows, "terminal:create processing");
+
     // Check session is active
-    let session_ok = sync_engine.get_session_by_namespace(session_id, namespace).await
-        .is_some_and(|s| s.active);
+    let session = sync_engine.get_session_by_namespace(session_id, namespace).await;
+    let session_ok = session.as_ref().is_some_and(|s| s.active);
     if !session_ok {
+        warn!(session_id, namespace, active = ?session.as_ref().map(|s| s.active), "terminal:create session check failed");
         let err = serde_json::json!({
             "event": "terminal:error",
             "data": {"terminalId": terminal_id, "message": "Session is inactive or unavailable."}
@@ -109,8 +125,12 @@ async fn handle_terminal_create(
 
     // Find a CLI socket in the session room
     let cli_socket_id = match conn_mgr.pick_cli_in_session(session_id, namespace).await {
-        Some(id) => id,
+        Some(id) => {
+            debug!(session_id, cli_socket_id = %id, "found CLI socket for terminal");
+            id
+        }
         None => {
+            warn!(session_id, namespace, "terminal:create no CLI socket found in session room");
             let err = serde_json::json!({
                 "event": "terminal:error",
                 "data": {"terminalId": terminal_id, "message": "CLI is not connected for this session."}

@@ -213,6 +213,16 @@ impl WsSessionClient {
         })).await;
     }
 
+    /// Register an event handler.
+    pub async fn on(&self, event: impl Into<String>, handler: impl Fn(Value) + Send + Sync + 'static) {
+        self.ws.on(event, handler).await;
+    }
+
+    /// Send a fire-and-forget event.
+    pub async fn emit(&self, event: impl Into<String>, data: Value) {
+        self.ws.emit(event, data).await;
+    }
+
     /// Close the session connection.
     pub async fn close(&self) {
         self.ws.close().await;
