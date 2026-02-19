@@ -13,10 +13,7 @@ use super::super::terminal_registry::TerminalRegistry;
 async fn resolve_cli_socket(conn_mgr: &ConnectionManager, cli_socket_id: &str, namespace: &str) -> bool {
     // Check the connection exists, is CLI type, and has matching namespace
     let conns = conn_mgr.connections_read().await;
-    match conns.get(cli_socket_id) {
-        Some(conn) if conn.conn_type == WsConnType::Cli && conn.namespace == namespace => true,
-        _ => false,
-    }
+    matches!(conns.get(cli_socket_id), Some(conn) if conn.conn_type == WsConnType::Cli && conn.namespace == namespace)
 }
 
 /// Process an incoming WebSocket event from a terminal (webapp) connection.

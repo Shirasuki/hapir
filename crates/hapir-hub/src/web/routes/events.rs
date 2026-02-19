@@ -223,10 +223,7 @@ async fn set_visibility(
 // --- Helpers ---
 
 fn parse_bool(value: &Option<String>) -> bool {
-    match value.as_deref() {
-        Some("true") | Some("1") => true,
-        _ => false,
-    }
+    matches!(value.as_deref(), Some("true") | Some("1"))
 }
 
 fn parse_optional_id(value: Option<&str>) -> Option<String> {
