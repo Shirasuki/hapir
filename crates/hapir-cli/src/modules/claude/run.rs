@@ -8,21 +8,21 @@ use tracing::{debug, error, info, warn};
 
 use hapir_shared::schemas::StartedBy as SharedStartedBy;
 
-use crate::agent::loop_base::{run_local_remote_session, LoopOptions};
+use super::local_launcher::claude_local_launcher;
+use super::remote_launcher::claude_remote_launcher;
+use crate::agent::loop_base::{LoopOptions, run_local_remote_session};
 use crate::agent::runner_lifecycle::{
-    create_mode_change_handler, set_controlled_by_user, RunnerLifecycle, RunnerLifecycleOptions,
+    RunnerLifecycle, RunnerLifecycleOptions, create_mode_change_handler, set_controlled_by_user,
 };
 use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions, SessionMode};
-use crate::agent::session_factory::{bootstrap_session, SessionBootstrapOptions};
+use crate::agent::session_factory::{SessionBootstrapOptions, bootstrap_session};
 use crate::config::Configuration;
+use crate::handlers;
 use crate::handlers::uploads;
 use crate::modules::claude::hook_server::start_hook_server;
 use crate::modules::claude::session::{ClaudeSession, StartedBy};
-use crate::rpc::RpcHandlerManager;
 use crate::utils::message_queue::MessageQueue2;
 use crate::ws::session_client::WsSessionClient;
-use super::local_launcher::claude_local_launcher;
-use super::remote_launcher::claude_remote_launcher;
 
 /// Options for starting a Claude session.
 #[derive(Debug, Clone, Default)]
@@ -528,15 +528,6 @@ fn write_hook_settings(session_id: &str, hook_port: u16, hook_token: &str) -> St
 }
 
 /// Register common RPC handlers (bash, files, directories, git, ripgrep) on the WebSocket client.
-async fn register_common_rpc_handlers(
-    ws_client: &Arc<WsSessionClient>,
-    working_directory: &str,
-) {
-    let rpc_mgr = RpcHandlerManager::new("_tmp_");
-    crate::handlers::register_all_handlers(&rpc_mgr, working_directory).await;
-    for (method, handler) in rpc_mgr.drain_handlers().await {
-        ws_client
-            .register_rpc(&method, move |params| handler(params))
-            .await;
-    }
+async fn register_common_rpc_handlers(ws_client: &Arc<WsSessionClient>, working_directory: &str) {
+    handlers::register_all_handlers(ws_client.as_ref(), working_directory).await;
 }

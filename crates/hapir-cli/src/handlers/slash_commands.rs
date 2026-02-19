@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use super::plugins::get_installed_plugins;
-use crate::rpc::RpcHandlerManager;
+use crate::rpc::RpcRegistry;
 
 fn builtin_commands(agent: &str) -> Vec<Value> {
     match agent {
@@ -139,7 +139,7 @@ async fn scan_plugin_commands(agent: &str) -> Vec<Value> {
     all
 }
 
-pub async fn register_slash_command_handlers(rpc: &RpcHandlerManager, _working_directory: &str) {
+pub async fn register_slash_command_handlers(rpc: &(impl RpcRegistry + Sync), _working_directory: &str) {
     rpc.register("listSlashCommands", move |params: Value| async move {
         let agent = params
             .get("agent")

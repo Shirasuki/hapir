@@ -5,7 +5,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use tracing::debug;
 
-use crate::rpc::RpcHandlerManager;
+use crate::rpc::RpcRegistry;
 
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 
@@ -45,7 +45,7 @@ fn sanitize_filename(filename: &str) -> String {
     }
 }
 
-pub async fn register_upload_handlers(rpc: &RpcHandlerManager, _working_directory: &str) {
+pub async fn register_upload_handlers(rpc: &(impl RpcRegistry + Sync), _working_directory: &str) {
     // uploadFile handler
     rpc.register("uploadFile", move |params: Value| async move {
         let filename = match params.get("filename").and_then(|v| v.as_str()) {

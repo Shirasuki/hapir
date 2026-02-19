@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -7,6 +9,7 @@ use tracing::{debug, info, warn};
 use hapir_shared::schemas::{Metadata, Session};
 
 use super::client::{WsClient, WsClientConfig};
+use crate::rpc::RpcRegistry;
 
 /// Session-scoped WebSocket client.
 pub struct WsSessionClient {
@@ -223,6 +226,31 @@ impl WsSessionClient {
     #[allow(dead_code)]
     pub async fn metadata(&self) -> Option<Metadata> {
         self.metadata.lock().await.clone()
+    }
+}
+
+impl RpcRegistry for WsSessionClient {
+    fn register<F, Fut>(
+        &self,
+        method: &str,
+        handler: F,
+    ) -> impl Future<Output = ()> + Send
+    where
+        F: Fn(Value) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Value> + Send + 'static,
+    {
+        let scoped_method = format!("{}:{}", self.session_id, method);
+        let ws = self.ws.clone();
+        let boxed_handler = move |params: Value| -> Pin<Box<dyn Future<Output = Value> + Send>> {
+            Box::pin(handler(params))
+        };
+        async move {
+            info!(method = %scoped_method, "registering session-scoped RPC handler");
+            ws.register_rpc(&scoped_method, boxed_handler).await;
+            ws.emit("rpc-register", json!({
+                "method": scoped_method,
+            })).await;
+        }
     }
 }
 

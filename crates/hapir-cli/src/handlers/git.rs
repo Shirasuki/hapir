@@ -4,7 +4,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tracing::debug;
 
-use crate::rpc::RpcHandlerManager;
+use crate::rpc::RpcRegistry;
 
 use super::path_security::validate_path;
 
@@ -50,7 +50,7 @@ fn resolve_cwd(params: &Value, wd: &str) -> Result<String, Value> {
     Ok(cwd.to_string())
 }
 
-pub async fn register_git_handlers(rpc: &RpcHandlerManager, working_directory: &str) {
+pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = Arc::new(working_directory.to_string());
 
     // git-status

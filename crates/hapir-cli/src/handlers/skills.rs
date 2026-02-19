@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use super::plugins::get_installed_plugins;
-use crate::rpc::RpcHandlerManager;
+use crate::rpc::RpcRegistry;
 
 fn skills_root() -> PathBuf {
     let codex_home = std::env::var("CODEX_HOME")
@@ -126,7 +126,7 @@ async fn list_skills_impl() -> Vec<Value> {
     skills
 }
 
-pub async fn register_skills_handlers(rpc: &RpcHandlerManager, _working_directory: &str) {
+pub async fn register_skills_handlers(rpc: &(impl RpcRegistry + Sync), _working_directory: &str) {
     rpc.register("listSkills", move |_params: Value| async move {
         debug!("listSkills");
         let skills = list_skills_impl().await;

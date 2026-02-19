@@ -465,16 +465,11 @@ async fn connect_to_hub(
     }).await;
 
     // Register common RPC handlers (bash, files, directories, git, ripgrep)
-    // Matches TS: registerCommonHandlers(this.rpcHandlerManager, process.cwd())
     {
-        let rpc_mgr = crate::rpc::RpcHandlerManager::new("_tmp_");
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "/".to_string());
-        crate::handlers::register_all_handlers(&rpc_mgr, &cwd).await;
-        for (method, handler) in rpc_mgr.drain_handlers().await {
-            ws.register_rpc(&method, move |params| handler(params)).await;
-        }
+        crate::handlers::register_all_handlers(ws.as_ref(), &cwd).await;
     }
 
     // Connect WebSocket and wait for the connection to be established

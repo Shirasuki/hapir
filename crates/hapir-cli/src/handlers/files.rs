@@ -7,11 +7,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
-use crate::rpc::RpcHandlerManager;
+use crate::rpc::RpcRegistry;
 
 use super::path_security::validate_path;
 
-pub async fn register_file_handlers(rpc: &RpcHandlerManager, working_directory: &str) {
+pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = Arc::new(working_directory.to_string());
 
     // readFile handler

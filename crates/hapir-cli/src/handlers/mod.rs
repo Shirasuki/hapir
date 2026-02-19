@@ -9,10 +9,10 @@ pub mod skills;
 pub mod slash_commands;
 pub mod uploads;
 
-use crate::rpc::RpcHandlerManager;
+use crate::rpc::RpcRegistry;
 
-/// Register all common RPC handlers on the given manager.
-pub async fn register_all_handlers(rpc: &RpcHandlerManager, working_directory: &str) {
+/// Register all common RPC handlers on the given registry.
+pub async fn register_all_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     bash::register_bash_handlers(rpc, working_directory).await;
     files::register_file_handlers(rpc, working_directory).await;
     directories::register_directory_handlers(rpc, working_directory).await;

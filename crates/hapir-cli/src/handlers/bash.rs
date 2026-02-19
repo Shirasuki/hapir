@@ -4,11 +4,11 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tracing::debug;
 
-use crate::rpc::RpcHandlerManager;
+use crate::rpc::RpcRegistry;
 
 use super::path_security::validate_path;
 
-pub async fn register_bash_handlers(rpc: &RpcHandlerManager, working_directory: &str) {
+pub async fn register_bash_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = Arc::new(working_directory.to_string());
 
     rpc.register("bash", move |params: Value| {

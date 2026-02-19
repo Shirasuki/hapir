@@ -3,11 +3,11 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tracing::debug;
 
-use crate::rpc::RpcHandlerManager;
+use crate::rpc::RpcRegistry;
 
 use super::path_security::validate_path;
 
-pub async fn register_ripgrep_handlers(rpc: &RpcHandlerManager, working_directory: &str) {
+pub async fn register_ripgrep_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = Arc::new(working_directory.to_string());
 
     rpc.register("ripgrep", move |params: Value| {

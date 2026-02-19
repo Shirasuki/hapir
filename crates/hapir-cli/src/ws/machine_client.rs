@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,6 +7,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use super::client::{WsClient, WsClientConfig};
+use crate::rpc::RpcRegistry;
 
 /// Machine-scoped WebSocket client.
 pub struct WsMachineClient {
@@ -209,5 +212,29 @@ impl WsMachineClient {
     #[allow(dead_code)]
     pub fn machine_id(&self) -> &str {
         &self.machine_id
+    }
+}
+
+impl RpcRegistry for WsMachineClient {
+    fn register<F, Fut>(
+        &self,
+        method: &str,
+        handler: F,
+    ) -> impl Future<Output = ()> + Send
+    where
+        F: Fn(Value) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Value> + Send + 'static,
+    {
+        let scoped_method = format!("{}:{}", self.machine_id, method);
+        let ws = self.ws.clone();
+        let boxed_handler = move |params: Value| -> Pin<Box<dyn Future<Output = Value> + Send>> {
+            Box::pin(handler(params))
+        };
+        async move {
+            ws.register_rpc(&scoped_method, boxed_handler).await;
+            ws.emit("rpc-register", json!({
+                "method": scoped_method,
+            })).await;
+        }
     }
 }
