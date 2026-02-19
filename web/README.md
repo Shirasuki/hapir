@@ -66,7 +66,7 @@ See `src/router.tsx` for route definitions.
 ### Terminal (`src/routes/sessions/terminal.tsx`)
 
 - Remote terminal via xterm.js
-- Real-time via Socket.IO
+- Real-time via WebSocket
 - Resize handling
 
 ### Voice assistant
@@ -109,7 +109,7 @@ See `src/hooks/useSSE.ts`.
 
 ## Stack
 
-React 19 + Vite + TanStack Router/Query + Tailwind + @assistant-ui/react + xterm.js + @elevenlabs/react + socket.io-client + workbox + shiki.
+React 19 + Vite + TanStack Router/Query + Tailwind + @assistant-ui/react + xterm.js + @elevenlabs/react + workbox + shiki.
 
 ## Source structure
 

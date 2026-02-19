@@ -66,19 +66,6 @@ registerRoute(
 )
 
 registerRoute(
-    /^https:\/\/cdn\.socket\.io\/.*/,
-    new CacheFirst({
-        cacheName: 'cdn-socketio',
-        plugins: [
-            new ExpirationPlugin({
-                maxEntries: 5,
-                maxAgeSeconds: 60 * 60 * 24 * 30
-            })
-        ]
-    })
-)
-
-registerRoute(
     /^https:\/\/telegram\.org\/.*/,
     new CacheFirst({
         cacheName: 'cdn-telegram',
