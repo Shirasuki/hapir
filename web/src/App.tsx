@@ -233,11 +233,8 @@ function AppInner() {
     }, [addToast])
 
     const eventSubscription = useMemo(() => {
-        if (selectedSessionId) {
-            return { sessionId: selectedSessionId }
-        }
         return { all: true }
-    }, [selectedSessionId])
+    }, [])
 
     const { subscriptionId } = useSSE({
         enabled: Boolean(api && token),

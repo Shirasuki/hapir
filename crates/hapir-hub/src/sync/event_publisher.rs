@@ -1,5 +1,3 @@
-use std::sync::RwLock;
-
 use hapir_shared::schemas::SyncEvent;
 use tokio::sync::{broadcast, mpsc};
 
@@ -10,10 +8,11 @@ pub type SyncEventListener = Box<dyn Fn(&SyncEvent) + Send + Sync>;
 
 /// Publishes sync events to listeners and SSE connections.
 /// Uses a tokio broadcast channel for fan-out.
-/// SSE manager is wrapped in an RwLock so that `emit()` only requires `&self`.
+/// SseManager handles its own concurrency internally (DashMap + VisibilityTracker RwLock),
+/// so no outer lock is needed.
 pub struct EventPublisher {
     tx: broadcast::Sender<SyncEvent>,
-    sse_manager: RwLock<SseManager>,
+    sse_manager: SseManager,
     heartbeat_ms: u64,
 }
 
@@ -23,7 +22,7 @@ impl EventPublisher {
         let heartbeat_ms = sse_manager.heartbeat_ms();
         Self {
             tx,
-            sse_manager: RwLock::new(sse_manager),
+            sse_manager,
             heartbeat_ms,
         }
     }
@@ -31,8 +30,6 @@ impl EventPublisher {
     pub fn subscribe(&self) -> broadcast::Receiver<SyncEvent> {
         self.tx.subscribe()
     }
-
-    // --- SSE delegate methods ---
 
     pub fn subscribe_sse(
         &self,
@@ -43,23 +40,19 @@ impl EventPublisher {
         machine_id: Option<String>,
         visibility: VisibilityState,
     ) -> (mpsc::UnboundedReceiver<SseMessage>, SseSubscription) {
-        let mut mgr = self.sse_manager.write().unwrap();
-        mgr.subscribe(id, namespace, all, session_id, machine_id, visibility)
+        self.sse_manager.subscribe(id, namespace, all, session_id, machine_id, visibility)
     }
 
     pub fn unsubscribe_sse(&self, id: &str) {
-        let mut mgr = self.sse_manager.write().unwrap();
-        mgr.unsubscribe(id);
+        self.sse_manager.unsubscribe(id);
     }
 
     pub fn sse_connection_count(&self) -> usize {
-        let mgr = self.sse_manager.read().unwrap();
-        mgr.connection_count()
+        self.sse_manager.connection_count()
     }
 
     pub fn has_visible_sse_connection(&self, namespace: &str) -> bool {
-        let mgr = self.sse_manager.read().unwrap();
-        mgr.visibility().has_visible_connection(namespace)
+        self.sse_manager.visibility().has_visible_connection(namespace)
     }
 
     pub fn set_sse_visibility(
@@ -68,40 +61,27 @@ impl EventPublisher {
         namespace: &str,
         state: VisibilityState,
     ) -> bool {
-        let mut mgr = self.sse_manager.write().unwrap();
-        mgr.visibility_mut().set_visibility(subscription_id, namespace, state)
+        self.sse_manager.visibility().set_visibility(subscription_id, namespace, state)
     }
 
     pub fn send_heartbeats(&self) {
-        let mut mgr = self.sse_manager.write().unwrap();
-        mgr.send_heartbeats();
+        self.sse_manager.send_heartbeats();
     }
 
     pub fn send_toast(&self, namespace: &str, event: &SyncEvent) -> usize {
-        let mut mgr = self.sse_manager.write().unwrap();
-        mgr.send_toast(namespace, event)
+        self.sse_manager.send_toast(namespace, event)
     }
 
     pub fn heartbeat_ms(&self) -> u64 {
         self.heartbeat_ms
     }
 
-    // --- Event emission ---
-
     pub fn emit(&self, event: SyncEvent) {
-        // Broadcast to SSE connections and clean up failed ones
-        let failed = {
-            let mgr = self.sse_manager.read().unwrap();
-            mgr.broadcast(&event)
-        };
-        if !failed.is_empty() {
-            let mut mgr = self.sse_manager.write().unwrap();
-            for id in failed {
-                mgr.unsubscribe(&id);
-            }
+        let failed = self.sse_manager.broadcast(&event);
+        for id in failed {
+            self.sse_manager.unsubscribe(&id);
         }
 
-        // Broadcast to channel subscribers
         let _ = self.tx.send(event);
     }
 

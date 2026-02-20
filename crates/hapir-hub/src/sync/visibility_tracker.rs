@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::RwLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisibilityState {
@@ -6,64 +7,81 @@ pub enum VisibilityState {
     Hidden,
 }
 
-/// Tracks which SSE connections are "visible" (browser tab in foreground).
-pub struct VisibilityTracker {
+struct VisibilityInner {
     /// namespace → set of visible subscription IDs
     visible_connections: HashMap<String, HashSet<String>>,
     /// subscription ID → namespace
     subscription_to_namespace: HashMap<String, String>,
 }
 
+/// Tracks which SSE connections are "visible" (browser tab in foreground).
+/// Uses internal locking so all public methods take `&self`.
+pub struct VisibilityTracker {
+    inner: RwLock<VisibilityInner>,
+}
+
 impl VisibilityTracker {
     pub fn new() -> Self {
         Self {
-            visible_connections: HashMap::new(),
-            subscription_to_namespace: HashMap::new(),
+            inner: RwLock::new(VisibilityInner {
+                visible_connections: HashMap::new(),
+                subscription_to_namespace: HashMap::new(),
+            }),
         }
     }
 
-    pub fn register_connection(&mut self, subscription_id: &str, namespace: &str, state: VisibilityState) {
-        self.remove_connection(subscription_id);
-        self.subscription_to_namespace.insert(subscription_id.to_string(), namespace.to_string());
+    pub fn register_connection(&self, subscription_id: &str, namespace: &str, state: VisibilityState) {
+        let mut inner = self.inner.write().unwrap();
+        inner.remove_connection(subscription_id);
+        inner.subscription_to_namespace.insert(subscription_id.to_string(), namespace.to_string());
         if state == VisibilityState::Visible {
-            self.add_visible(namespace, subscription_id);
+            inner.add_visible(namespace, subscription_id);
         }
     }
 
-    pub fn set_visibility(&mut self, subscription_id: &str, namespace: &str, state: VisibilityState) -> bool {
-        let tracked = match self.subscription_to_namespace.get(subscription_id) {
+    pub fn set_visibility(&self, subscription_id: &str, namespace: &str, state: VisibilityState) -> bool {
+        let mut inner = self.inner.write().unwrap();
+        let tracked = match inner.subscription_to_namespace.get(subscription_id) {
             Some(ns) if ns == namespace => ns.clone(),
             _ => return false,
         };
 
         if state == VisibilityState::Visible {
-            self.add_visible(&tracked, subscription_id);
+            inner.add_visible(&tracked, subscription_id);
         } else {
-            self.remove_visible(&tracked, subscription_id);
+            inner.remove_visible(&tracked, subscription_id);
         }
         true
     }
 
-    pub fn remove_connection(&mut self, subscription_id: &str) {
-        if let Some(namespace) = self.subscription_to_namespace.remove(subscription_id) {
-            self.remove_visible(&namespace, subscription_id);
-        }
+    pub fn remove_connection(&self, subscription_id: &str) {
+        self.inner.write().unwrap().remove_connection(subscription_id);
     }
 
     pub fn has_visible_connection(&self, namespace: &str) -> bool {
-        self.visible_connections
+        let inner = self.inner.read().unwrap();
+        inner.visible_connections
             .get(namespace)
             .is_some_and(|s| !s.is_empty())
     }
 
     pub fn is_visible_connection(&self, subscription_id: &str) -> bool {
-        let namespace = match self.subscription_to_namespace.get(subscription_id) {
+        let inner = self.inner.read().unwrap();
+        let namespace = match inner.subscription_to_namespace.get(subscription_id) {
             Some(ns) => ns,
             None => return false,
         };
-        self.visible_connections
+        inner.visible_connections
             .get(namespace.as_str())
             .is_some_and(|s| s.contains(subscription_id))
+    }
+}
+
+impl VisibilityInner {
+    fn remove_connection(&mut self, subscription_id: &str) {
+        if let Some(namespace) = self.subscription_to_namespace.remove(subscription_id) {
+            self.remove_visible(&namespace, subscription_id);
+        }
     }
 
     fn add_visible(&mut self, namespace: &str, subscription_id: &str) {
