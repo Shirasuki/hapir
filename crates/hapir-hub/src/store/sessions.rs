@@ -9,7 +9,7 @@ use super::versioned_updates::update_versioned_field;
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 

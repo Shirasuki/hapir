@@ -8,7 +8,7 @@ use super::types::StoredMessage;
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 

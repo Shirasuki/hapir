@@ -434,7 +434,10 @@ export function ingestMessageDelta(
 
         const existing = streaming.get(delta.messageId)
         if (existing) {
-            existing.text += delta.text
+            streaming.set(delta.messageId, {
+                ...existing,
+                text: existing.text + delta.text,
+            })
         } else {
             streaming.set(delta.messageId, {
                 messageId: delta.messageId,
