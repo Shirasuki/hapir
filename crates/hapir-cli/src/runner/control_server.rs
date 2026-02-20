@@ -478,7 +478,10 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
                             tail.push('\n');
                             // Keep only last 4000 chars
                             if tail.len() > 4000 {
-                                let start = tail.len() - 4000;
+                                let mut start = tail.len() - 4000;
+                                while !tail.is_char_boundary(start) {
+                                    start += 1;
+                                }
                                 tail = tail[start..].to_string();
                             }
                             // Update tracked session
