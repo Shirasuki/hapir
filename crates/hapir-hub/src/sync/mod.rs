@@ -479,6 +479,13 @@ impl SyncEngine {
 
         let resume_token = resume_token.map(|t| t.to_string());
 
+        tracing::info!(
+            session_id = %original_id,
+            ?resume_token,
+            flavor = flavor,
+            "[resumeSession] extracted resume token from metadata"
+        );
+
         // Phase 2: find target machine (read lock, then release)
         let target = {
             let mc = self.machine_cache.read().await;
@@ -558,15 +565,21 @@ impl SyncEngine {
         }
 
         // Phase 5: merge sessions (write lock)
-        if spawn_session_id != original_id
-            && let Err(e) = self.session_cache.write().await.merge_sessions(
+        if spawn_session_id != original_id {
+            tracing::info!(
+                original_id = %original_id,
+                spawn_session_id = %spawn_session_id,
+                "[resumeSession] merging old session into new"
+            );
+            if let Err(e) = self.session_cache.write().await.merge_sessions(
                 &original_id, &spawn_session_id, namespace, &self.store, &self.publisher,
             )
-        {
-            return ResumeSessionResult::Error {
-                message: e.to_string(),
-                code: ResumeSessionErrorCode::ResumeFailed,
-            };
+            {
+                return ResumeSessionResult::Error {
+                    message: e.to_string(),
+                    code: ResumeSessionErrorCode::ResumeFailed,
+                };
+            }
         }
 
         ResumeSessionResult::Success { session_id: spawn_session_id }

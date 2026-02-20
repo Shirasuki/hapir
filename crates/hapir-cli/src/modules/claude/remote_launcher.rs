@@ -109,7 +109,22 @@ pub async fn claude_remote_launcher(
         // Spawn or reuse the interactive Claude process
         let needs_spawn = query_handle.is_none();
         if needs_spawn {
-            let session_id = session.base.session_id.lock().await.clone();
+            let mut resume_id = session.base.session_id.lock().await.clone();
+
+            // If no session_id yet, check claude_args for --resume token
+            // (passed by runner when resuming an inactive session)
+            if resume_id.is_none() {
+                if let Some(ref args) = *session.claude_args.lock().await {
+                    if let Some(pos) = args.iter().position(|a| a == "--resume") {
+                        resume_id = args.get(pos + 1).cloned();
+                    }
+                }
+            }
+
+            info!(
+                "[claudeRemoteLauncher] Spawning: resume_id={:?}",
+                resume_id
+            );
             let query_options = QueryOptions {
                 cwd: Some(working_directory.clone()),
                 model: mode.model.clone(),
@@ -119,8 +134,8 @@ pub async fn claude_remote_launcher(
                 permission_mode: mode.permission_mode.clone(),
                 allowed_tools: mode.allowed_tools.clone(),
                 disallowed_tools: mode.disallowed_tools.clone(),
-                continue_conversation: session_id.is_some(),
-                resume: session_id,
+                continue_conversation: false,
+                resume: resume_id,
                 mcp_servers: if session.mcp_servers.is_empty() {
                     None
                 } else {
@@ -130,7 +145,10 @@ pub async fn claude_remote_launcher(
                 ..Default::default()
             };
 
-            info!("[claudeRemoteLauncher] Spawning interactive claude SDK");
+            info!(
+                "[claudeRemoteLauncher] Spawning interactive claude SDK: continue={}, resume={:?}",
+                query_options.continue_conversation, query_options.resume
+            );
             match query::query_interactive(query_options) {
                 Ok(qh) => {
                     query_handle = Some(qh);

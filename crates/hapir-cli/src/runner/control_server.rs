@@ -94,7 +94,9 @@ async fn session_started(
     info!(session_id = %payload.session_id, "session started webhook");
 
     // Extract hostPid from metadata (matches TS: sessionMetadata.hostPid)
-    let host_pid = payload.metadata.as_ref()
+    let host_pid = payload
+        .metadata
+        .as_ref()
         .and_then(|m| m.get("hostPid"))
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
@@ -141,15 +143,16 @@ async fn session_started(
             );
         }
     } else {
-        info!("session webhook missing hostPid for sessionId: {}", payload.session_id);
+        info!(
+            "session webhook missing hostPid for sessionId: {}",
+            payload.session_id
+        );
     }
 
     (StatusCode::OK, Json(json!({"status": "ok"})))
 }
 
-async fn list_sessions(
-    State(state): State<RunnerState>,
-) -> Json<ListSessionsResponse> {
+async fn list_sessions(State(state): State<RunnerState>) -> Json<ListSessionsResponse> {
     let sessions = state.sessions.lock().await;
     Json(ListSessionsResponse {
         children: sessions
@@ -197,7 +200,9 @@ pub async fn do_stop_session(state: &RunnerState, session_id: &str) -> Value {
                 let pgid_result = unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
                 if pgid_result != 0 {
                     // Fallback: kill single process
-                    unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
                 }
             }
             let _ = pid;
@@ -219,7 +224,10 @@ async fn stop_session(
 }
 
 /// Spawn a session process. Shared logic used by both HTTP handler and RPC.
-pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> SpawnSessionResponse {
+pub async fn do_spawn_session(
+    state: &RunnerState,
+    req: SpawnSessionRequest,
+) -> SpawnSessionResponse {
     let session_type = req.session_type.as_deref().unwrap_or("simple");
     let dir = std::path::Path::new(&req.directory);
     let mut directory_created = false;
@@ -241,7 +249,10 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
             if let Err(e) = std::fs::create_dir_all(&req.directory) {
                 let msg = match e.kind() {
                     std::io::ErrorKind::PermissionDenied => {
-                        format!("Permission denied. You don't have write access to create a folder at '{}'. Try using a different path or check your permissions.", req.directory)
+                        format!(
+                            "Permission denied. You don't have write access to create a folder at '{}'. Try using a different path or check your permissions.",
+                            req.directory
+                        )
                     }
                     _ => {
                         let raw = e.raw_os_error();
@@ -269,7 +280,10 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
             return SpawnSessionResponse {
                 r#type: "error".to_string(),
                 session_id: None,
-                error: Some(format!("Worktree sessions require an existing Git repository. Directory not found: {}", req.directory)),
+                error: Some(format!(
+                    "Worktree sessions require an existing Git repository. Directory not found: {}",
+                    req.directory
+                )),
                 directory: None,
             };
         }
@@ -331,7 +345,12 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
     // because --resume is unknown to ClaudeArgs and triggers trailing_var_arg
     // capture, swallowing all subsequent flags into passthrough_args.
     let mut args = vec![agent_cmd.to_string()];
-    args.extend(["--hapir-starting-mode".to_string(), "remote".to_string(), "--started-by".to_string(), "runner".to_string()]);
+    args.extend([
+        "--hapir-starting-mode".to_string(),
+        "remote".to_string(),
+        "--started-by".to_string(),
+        "runner".to_string(),
+    ]);
     if let Some(ref model) = req.model
         && agent_cmd != "opencode"
     {
@@ -343,6 +362,11 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
     }
     // --resume must be last: it's a passthrough arg for the external agent CLI
     if let Some(ref resume_id) = req.resume_session_id {
+        info!(
+            session_id = %session_id,
+            resume_id = %resume_id,
+            "[spawnSession] passing --resume token to agent CLI"
+        );
         if agent_cmd == "codex" {
             args.push("resume".to_string());
             args.push(resume_id.clone());
@@ -351,6 +375,12 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
             args.push(resume_id.clone());
         }
     }
+
+    info!(
+        session_id = %session_id,
+        ?args,
+        "[spawnSession] final CLI args"
+    );
 
     // Build command — capture stderr for debugging, detach on Unix
     let mut cmd = tokio::process::Command::new(&exe);
@@ -378,7 +408,8 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
     if let Some(ref token) = req.token {
         if agent_cmd == "codex" {
             // Create temp dir with auth.json for Codex
-            let codex_dir = std::env::temp_dir().join(format!("hapi-codex-{}", uuid::Uuid::new_v4()));
+            let codex_dir =
+                std::env::temp_dir().join(format!("hapi-codex-{}", uuid::Uuid::new_v4()));
             if std::fs::create_dir_all(&codex_dir).is_ok() {
                 let auth_path = codex_dir.join("auth.json");
                 if std::fs::write(&auth_path, token).is_ok() {
@@ -427,13 +458,19 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
             // Register awaiter with real PID immediately so webhook can resolve it
             {
                 let mut awaiters = state.pid_to_awaiter.lock().await;
-                awaiters.insert(pid, Box::new(move |session| {
-                    let _ = awaiter_tx.send(session);
-                }));
+                awaiters.insert(
+                    pid,
+                    Box::new(move |session| {
+                        let _ = awaiter_tx.send(session);
+                    }),
+                );
             }
 
             let dir_msg = if directory_created {
-                Some(format!("The path '{}' did not exist. We created a new folder and spawned a new session there.", req.directory))
+                Some(format!(
+                    "The path '{}' did not exist. We created a new folder and spawned a new session there.",
+                    req.directory
+                ))
             } else {
                 None
             };
@@ -544,7 +581,9 @@ pub async fn do_spawn_session(state: &RunnerState, req: SpawnSessionRequest) -> 
                     // Collect stderr tail for error reporting
                     let stderr_tail = {
                         let sessions = state.sessions.lock().await;
-                        sessions.get(&session_id).and_then(|s| s.stderr_tail.clone())
+                        sessions
+                            .get(&session_id)
+                            .and_then(|s| s.stderr_tail.clone())
                     };
                     if let Some(ref tail) = stderr_tail {
                         warn!(pid = pid, "session webhook timeout, stderr tail:\n{}", tail);
@@ -622,7 +661,9 @@ pub async fn stop_all_sessions(state: &RunnerState) -> Vec<String> {
             {
                 let pgid_result = unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
                 if pgid_result != 0 {
-                    unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
                 }
             }
             let _ = pid;

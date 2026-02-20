@@ -510,7 +510,15 @@ impl SessionCache {
             .ok_or_else(|| anyhow::anyhow!("new session not found"))?;
 
         // Merge messages
-        messages::merge_session_messages(&store.conn(), old_session_id, new_session_id)?;
+        let merge_result = messages::merge_session_messages(&store.conn(), old_session_id, new_session_id)?;
+        tracing::info!(
+            old_session_id = old_session_id,
+            new_session_id = new_session_id,
+            moved = merge_result.0,
+            old_max_seq = merge_result.1,
+            new_max_seq = merge_result.2,
+            "[mergeSessions] messages merged"
+        );
 
         // Merge metadata
         if let (Some(old_meta), Some(new_meta)) = (&old_stored.metadata, &new_stored.metadata)
@@ -551,6 +559,11 @@ impl SessionCache {
         }
 
         // Delete old session
+        tracing::info!(
+            old_session_id = old_session_id,
+            new_session_id = new_session_id,
+            "[mergeSessions] deleting old session"
+        );
         if !sessions::delete_session(&store.conn(), old_session_id, namespace) {
             return Err(anyhow::anyhow!("failed to delete old session during merge"));
         }
