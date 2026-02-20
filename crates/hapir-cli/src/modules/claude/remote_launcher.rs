@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -104,6 +105,7 @@ pub async fn claude_remote_launcher(
                 qh.close_stdin().await;
             }
             query_handle = None;
+            session.active_pid.store(0, Ordering::Relaxed);
         }
 
         // Spawn or reuse the interactive Claude process
@@ -151,6 +153,7 @@ pub async fn claude_remote_launcher(
             );
             match query::query_interactive(query_options) {
                 Ok(qh) => {
+                    session.active_pid.store(qh.pid().unwrap_or(0), Ordering::Relaxed);
                     query_handle = Some(qh);
                 }
                 Err(e) => {
@@ -186,6 +189,7 @@ pub async fn claude_remote_launcher(
         if let Err(e) = qh.send_user_message(&prompt).await {
             warn!("[claudeRemoteLauncher] Failed to send message: {}", e);
             query_handle = None;
+            session.active_pid.store(0, Ordering::Relaxed);
             continue;
         }
 
@@ -201,6 +205,7 @@ pub async fn claude_remote_launcher(
                 None => {
                     debug!("[claudeRemoteLauncher] Process exited");
                     query_handle = None;
+                    session.active_pid.store(0, Ordering::Relaxed);
                     break;
                 }
             };
@@ -586,7 +591,12 @@ pub async fn claude_remote_launcher(
         }
 
         session.base.on_thinking_change(false).await;
-        session.consume_one_time_flags().await;
+        // Only consume --resume after we've successfully received the session ID
+        // from the Claude process. If the process was killed before sending the
+        // System message, session_id is still None and we need --resume for re-spawn.
+        if session.base.session_id.lock().await.is_some() {
+            session.consume_one_time_flags().await;
+        }
 
         if should_switch {
             if let Some(ref qh) = query_handle {
@@ -598,6 +608,7 @@ pub async fn claude_remote_launcher(
         // If process died (no result), clear handle so next message re-spawns
         if !got_result {
             query_handle = None;
+            session.active_pid.store(0, Ordering::Relaxed);
         }
 
         if session.base.queue.is_closed().await {

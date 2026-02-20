@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -194,6 +195,29 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         })
         .await;
 
+    // Shared PID for the currently running codex process
+    let active_pid = Arc::new(AtomicU32::new(0));
+
+    // Register abort RPC handler
+    let pid_for_abort = active_pid.clone();
+    let sb_for_abort = session_base.clone();
+    ws_client
+        .register_rpc("abort", move |_params| {
+            let pid_ref = pid_for_abort.clone();
+            let sb = sb_for_abort.clone();
+            Box::pin(async move {
+                debug!("[runCodex] abort RPC received");
+                let pid = pid_ref.load(Ordering::Relaxed);
+                if pid != 0 {
+                    debug!("[runCodex] Sending SIGTERM to PID {}", pid);
+                    unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                }
+                sb.on_thinking_change(false).await;
+                serde_json::json!({"ok": true})
+            })
+        })
+        .await;
+
     // Set up terminal manager
     let terminal_mgr = crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
 
@@ -205,6 +229,8 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
     let wd_remote = working_directory.clone();
     let queue_remote = queue.clone();
     let ws_remote = ws_client.clone();
+    let pid_remote = active_pid.clone();
+    let sb_remote = session_base.clone();
 
     let loop_result = run_local_remote_session(LoopOptions {
         session: session_base.clone(),
@@ -218,7 +244,9 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
             let wd = wd_remote.clone();
             let q = queue_remote.clone();
             let ws = ws_remote.clone();
-            Box::pin(async move { codex_remote_launcher(&wd, &q, &ws).await })
+            let pid = pid_remote.clone();
+            let sb = sb_remote.clone();
+            Box::pin(async move { codex_remote_launcher(&wd, &q, &ws, &pid, &sb).await })
         }),
         on_session_ready: None,
     })
@@ -270,6 +298,8 @@ async fn codex_remote_launcher(
     working_directory: &str,
     queue: &MessageQueue2<CodexMode>,
     ws_client: &crate::ws::session_client::WsSessionClient,
+    active_pid: &AtomicU32,
+    session: &AgentSessionBase<CodexMode>,
 ) -> LoopResult {
     debug!("[codexRemoteLauncher] Starting in {}", working_directory);
 
@@ -314,6 +344,9 @@ async fn codex_remote_launcher(
             }
         };
 
+        active_pid.store(child.id().unwrap_or(0), Ordering::Relaxed);
+        session.on_thinking_change(true).await;
+
         // Write the prompt to stdin
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
@@ -352,6 +385,9 @@ async fn codex_remote_launcher(
                 warn!("[codexRemoteLauncher] Error waiting for codex: {}", e);
             }
         }
+
+        active_pid.store(0, Ordering::Relaxed);
+        session.on_thinking_change(false).await;
 
         // Check if queue is closed
         if queue.is_closed().await {

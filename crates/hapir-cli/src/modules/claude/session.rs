@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -24,6 +25,7 @@ pub struct ClaudeSession<Mode: Clone + Send + 'static> {
     pub starting_mode: SessionMode,
     pub local_launch_failure: Mutex<Option<LocalLaunchFailure>>,
     pub pending_permissions: Arc<Mutex<HashMap<String, PermissionResponseSender>>>,
+    pub active_pid: Arc<AtomicU32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

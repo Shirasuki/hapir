@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
@@ -247,6 +248,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
         starting_mode,
         local_launch_failure: Mutex::new(None),
         pending_permissions: Arc::new(Mutex::new(HashMap::new())),
+        active_pid: Arc::new(AtomicU32::new(0)),
     });
 
     register_common_rpc_handlers(&ws_client, &working_directory).await;
@@ -418,6 +420,25 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
             Box::pin(async move {
                 debug!("[runClaude] killSession RPC received, closing queue");
                 q.close().await;
+                serde_json::json!({"ok": true})
+            })
+        })
+        .await;
+
+    // Register abort RPC handler (hub calls this to interrupt the current turn)
+    let cs_for_abort = claude_session.clone();
+    ws_client
+        .register_rpc("abort", move |_params| {
+            let cs = cs_for_abort.clone();
+            Box::pin(async move {
+                debug!("[runClaude] abort RPC received");
+                let pid = cs.active_pid.load(Ordering::Relaxed);
+                if pid != 0 {
+                    debug!("[runClaude] Sending SIGTERM to PID {}", pid);
+                    unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                }
+                cs.pending_permissions.lock().await.clear();
+                cs.base.on_thinking_change(false).await;
                 serde_json::json!({"ok": true})
             })
         })

@@ -36,6 +36,11 @@ pub struct InteractiveQuery {
 }
 
 impl InteractiveQuery {
+    /// Return the OS PID of the child process, if still running.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     pub async fn next_message(&mut self) -> Option<SdkMessage> {
         self.rx.recv().await
     }
