@@ -199,6 +199,7 @@ function SessionPage() {
         refetch: refetchMessages,
         pendingCount,
         messagesVersion,
+        streamingMessages,
         flushPending,
         setAtBottom,
     } = useMessages(api, sessionId)
@@ -298,6 +299,7 @@ function SessionPage() {
             api={api}
             session={session}
             messages={messages}
+            streamingMessages={streamingMessages}
             messagesWarning={messagesWarning}
             hasMoreMessages={messagesHasMore}
             isLoadingMessages={messagesLoading}

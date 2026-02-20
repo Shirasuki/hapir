@@ -12,6 +12,13 @@ import {
     type MessageWindowState,
 } from '@/lib/message-window-store'
 
+type StreamingMessage = {
+    messageId: string
+    localId: string | null
+    text: string
+    createdAt: number
+}
+
 const EMPTY_STATE: MessageWindowState = {
     sessionId: 'unknown',
     messages: [],
@@ -25,10 +32,12 @@ const EMPTY_STATE: MessageWindowState = {
     warning: null,
     atBottom: true,
     messagesVersion: 0,
+    streamingMessages: new Map(),
 }
 
 export function useMessages(api: ApiClient | null, sessionId: string | null): {
     messages: DecryptedMessage[]
+    streamingMessages: Map<string, StreamingMessage>
     warning: string | null
     isLoading: boolean
     isLoadingMore: boolean
@@ -98,6 +107,7 @@ export function useMessages(api: ApiClient | null, sessionId: string | null): {
 
     return {
         messages: state.messages,
+        streamingMessages: state.streamingMessages ?? new Map(),
         warning: state.warning,
         isLoading: state.isLoading,
         isLoadingMore: state.isLoadingMore,

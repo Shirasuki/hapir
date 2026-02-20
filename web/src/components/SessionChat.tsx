@@ -22,6 +22,7 @@ export function SessionChat(props: {
     api: ApiClient
     session: Session
     messages: DecryptedMessage[]
+    streamingMessages: Map<string, { messageId: string; localId: string | null; text: string; createdAt: number }>
     messagesWarning: string | null
     hasMoreMessages: boolean
     isLoadingMessages: boolean
@@ -257,7 +258,7 @@ export function SessionChat(props: {
     const runtime = useHappyRuntime({
         session: props.session,
         blocks: reconciled.blocks,
-        streamingMessages: props.messages.streamingMessages ?? new Map(),
+        streamingMessages: props.streamingMessages,
         isSending: props.isSending,
         onSendMessage: handleSend,
         onAbort: handleAbort,
