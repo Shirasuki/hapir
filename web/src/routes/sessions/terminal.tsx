@@ -7,8 +7,17 @@ import { useAppGoBack } from '@/hooks/useAppGoBack'
 import { useSession } from '@/hooks/queries/useSession'
 import { useTerminalSocket } from '@/hooks/useTerminalSocket'
 import { useLongPress } from '@/hooks/useLongPress'
+import { useTranslation } from '@/lib/use-translation'
 import { TerminalView } from '@/components/Terminal/TerminalView'
 import { LoadingState } from '@/components/LoadingState'
+import { Button } from '@/components/ui/button'
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog'
 function BackIcon() {
     return (
         <svg
@@ -174,6 +183,11 @@ export default function TerminalPage() {
     const { api, token, baseUrl } = useAppContext()
     const goBack = useAppGoBack()
     const { session } = useSession(api, sessionId)
+    const { t } = useTranslation()
+    const [pasteDialogOpen, setPasteDialogOpen] = useState(false)
+    const [manualPasteText, setManualPasteText] = useState('')
+    const [menuOpen, setMenuOpen] = useState(false)
+    const menuRef = useRef<HTMLDivElement | null>(null)
     const terminalId = useMemo(() => {
         if (typeof crypto?.randomUUID === 'function') {
             return crypto.randomUUID()
@@ -222,10 +236,73 @@ export default function TerminalPage() {
         modifierStateRef.current = { ctrl: ctrlActive, alt: altActive }
     }, [ctrlActive, altActive])
 
+    const quickInputDisabled = !session?.active || terminalState.status !== 'connected'
+
     const resetModifiers = useCallback(() => {
         setCtrlActive(false)
         setAltActive(false)
     }, [])
+
+    const writePlainInput = useCallback((text: string) => {
+        if (!text || quickInputDisabled) {
+            return false
+        }
+        write(text)
+        resetModifiers()
+        terminalRef.current?.focus()
+        return true
+    }, [quickInputDisabled, write, resetModifiers])
+
+    const handlePasteAction = useCallback(async () => {
+        if (quickInputDisabled) {
+            return
+        }
+        const readClipboard = navigator.clipboard?.readText
+        if (readClipboard) {
+            try {
+                const clipboardText = await readClipboard.call(navigator.clipboard)
+                if (clipboardText && writePlainInput(clipboardText)) {
+                    return
+                }
+            } catch {
+                // Fall through to manual paste modal.
+            }
+        }
+        setManualPasteText('')
+        setPasteDialogOpen(true)
+    }, [quickInputDisabled, writePlainInput])
+
+    const handleManualPasteSubmit = useCallback(() => {
+        if (!manualPasteText.trim()) {
+            return
+        }
+        if (writePlainInput(manualPasteText)) {
+            setPasteDialogOpen(false)
+            setManualPasteText('')
+        }
+    }, [manualPasteText, writePlainInput])
+
+    const handleClearTerminal = useCallback(() => {
+        terminalRef.current?.clear()
+        setMenuOpen(false)
+    }, [])
+
+    useEffect(() => {
+        if (!menuOpen) return
+        const handlePointerDown = (event: Event) => {
+            if (menuRef.current?.contains(event.target as Node)) return
+            setMenuOpen(false)
+        }
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setMenuOpen(false)
+        }
+        document.addEventListener('pointerdown', handlePointerDown)
+        document.addEventListener('keydown', handleKeyDown)
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown)
+            document.removeEventListener('keydown', handleKeyDown)
+        }
+    }, [menuOpen])
 
     const dispatchSequence = useCallback(
         (sequence: string, modifierState: ModifierState) => {
@@ -311,7 +388,6 @@ export default function TerminalPage() {
         }
     }, [terminalState.status])
 
-    const quickInputDisabled = !session?.active || terminalState.status !== 'connected'
     const handleQuickInput = useCallback(
         (sequence: string) => {
             if (quickInputDisabled) {
@@ -365,10 +441,49 @@ export default function TerminalPage() {
                         <BackIcon />
                     </button>
                     <div className="min-w-0 flex-1">
-                        <div className="truncate font-semibold">Terminal</div>
+                        <div className="flex items-center gap-2">
+                            <span className="truncate font-semibold">Terminal</span>
+                            <ConnectionIndicator status={status} />
+                        </div>
                         <div className="truncate text-xs text-[var(--app-hint)]">{subtitle}</div>
                     </div>
-                    <ConnectionIndicator status={status} />
+                    <div className="relative" ref={menuRef}>
+                        <button
+                            type="button"
+                            onClick={() => setMenuOpen((v) => !v)}
+                            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--app-hint)] transition-colors hover:bg-[var(--app-secondary-bg)] hover:text-[var(--app-fg)]"
+                            aria-label="Menu"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="12" cy="5" r="1" />
+                                <circle cx="12" cy="12" r="1" />
+                                <circle cx="12" cy="19" r="1" />
+                            </svg>
+                        </button>
+                        {menuOpen ? (
+                            <div className="absolute right-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg" role="menu">
+                                <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--app-subtle-bg)]"
+                                    onClick={() => {
+                                        setMenuOpen(false)
+                                        void handlePasteAction()
+                                    }}
+                                >
+                                    {t('button.paste')}
+                                </button>
+                                <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--app-subtle-bg)]"
+                                    onClick={handleClearTerminal}
+                                >
+                                    {t('terminal.clearBuffer')}
+                                </button>
+                            </div>
+                        ) : null}
+                    </div>
                 </div>
             </div>
 
@@ -432,6 +547,52 @@ export default function TerminalPage() {
                     </div>
                 </div>
             </div>
+
+            <Dialog
+                open={pasteDialogOpen}
+                onOpenChange={(open) => {
+                    setPasteDialogOpen(open)
+                    if (!open) {
+                        setManualPasteText('')
+                    }
+                }}
+            >
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>{t('terminal.paste.fallbackTitle')}</DialogTitle>
+                        <DialogDescription>
+                            {t('terminal.paste.fallbackDescription')}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <textarea
+                        value={manualPasteText}
+                        onChange={(event) => setManualPasteText(event.target.value)}
+                        placeholder={t('terminal.paste.placeholder')}
+                        className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] p-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--app-link)]"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                    />
+                    <div className="mt-3 flex justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => {
+                                setPasteDialogOpen(false)
+                                setManualPasteText('')
+                            }}
+                        >
+                            {t('button.cancel')}
+                        </Button>
+                        <Button
+                            type="button"
+                            onClick={handleManualPasteSubmit}
+                            disabled={!manualPasteText.trim()}
+                        >
+                            {t('button.paste')}
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

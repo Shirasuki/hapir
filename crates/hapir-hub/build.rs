@@ -8,6 +8,16 @@ use hapir_shared::modes::*;
 use hapir_shared::schemas::*;
 use hapir_shared::session_summary::*;
 
+fn watch_recursive(dir: &Path) {
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        println!("cargo:rerun-if-changed={}", path.display());
+        if path.is_dir() {
+            watch_recursive(&path);
+        }
+    }
+}
+
 macro_rules! emit {
     ($out:expr, $cfg:expr, $($ty:ty),+ $(,)?) => {
         $({
@@ -82,7 +92,7 @@ fn main() {
 
     // generate TS types
     let shared_src = workspace_root.join("crates/hapir-shared/src");
-    println!("cargo:rerun-if-changed={}", shared_src.display());
+    watch_recursive(&shared_src);
     generate_ts_types(&web_dir.join("src/types"));
 
     // Only auto-build frontend in release mode
@@ -95,7 +105,7 @@ fn main() {
     // Rerun if the web source changes
     let web_src = web_dir.join("src");
     let web_pkg = web_dir.join("package.json");
-    println!("cargo:rerun-if-changed={}", web_src.display());
+    watch_recursive(&web_src);
     println!("cargo:rerun-if-changed={}", web_pkg.display());
 
     if !web_pkg.exists() {
