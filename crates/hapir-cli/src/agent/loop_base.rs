@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
-
+use std::sync::Arc;
 use super::session_base::{AgentSessionBase, SessionMode};
 use crate::terminal_utils;
 use tracing::debug;
@@ -25,7 +25,7 @@ type SessionReadyCallback<Mode> = Box<dyn FnOnce(&AgentSessionBase<Mode>) + Send
 
 /// Options for the local/remote loop.
 pub struct LoopOptions<Mode: Clone + Send + 'static> {
-    pub session: std::sync::Arc<AgentSessionBase<Mode>>,
+    pub session: Arc<AgentSessionBase<Mode>>,
     pub starting_mode: Option<SessionMode>,
     pub log_tag: String,
     pub run_local: LoopLauncher<Mode>,
@@ -53,7 +53,7 @@ pub async fn run_local_remote_session<Mode: Clone + Send + 'static>(
 
 /// Alternating loop between local and remote launchers.
 pub async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
-    session: std::sync::Arc<AgentSessionBase<Mode>>,
+    session: Arc<AgentSessionBase<Mode>>,
     starting_mode: Option<SessionMode>,
     log_tag: &str,
     run_local: &LoopLauncher<Mode>,

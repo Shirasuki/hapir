@@ -63,6 +63,7 @@ pub async fn claude_remote_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) 
 
     // The interactive query handle (lazily spawned on first message)
     let mut query_handle: Option<query::InteractiveQuery> = None;
+    let mut current_mode_hash: Option<String> = None;
 
     loop {
         info!("[claudeRemoteLauncher] Waiting for messages from queue...");
@@ -80,6 +81,29 @@ pub async fn claude_remote_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) 
         let prompt = batch.message;
         let mode = batch.mode;
         let is_isolate = batch.isolate;
+
+        // If the mode hash changed (e.g. model or permission mode switch),
+        // kill the existing process so it gets re-spawned with new parameters.
+        let mode_changed = current_mode_hash
+            .as_ref()
+            .is_some_and(|h| *h != batch.hash);
+        if mode_changed && query_handle.is_some() {
+            info!(
+                "[claudeRemoteLauncher] Mode changed ({} -> {}), restarting process",
+                current_mode_hash.as_deref().unwrap_or("?"),
+                batch.hash
+            );
+            if let Some(ref qh) = query_handle {
+                qh.kill().await;
+            }
+            query_handle = None;
+            session.active_pid.store(0, Ordering::Relaxed);
+            streaming_message_id = None;
+            accumulated_text.clear();
+            tracked_tool_calls.clear();
+            tool_use_to_request_id.clear();
+        }
+        current_mode_hash = Some(batch.hash.clone());
 
         debug!(
             "[claudeRemoteLauncher] Processing message (isolate={}): {}",
@@ -121,7 +145,10 @@ pub async fn claude_remote_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) 
                 }
             }
 
-            info!("[claudeRemoteLauncher] Spawning: resume_id={:?}", resume_id);
+            info!(
+                "[claudeRemoteLauncher] Spawning: resume_id={:?}, mode_changed={}",
+                resume_id, mode_changed
+            );
             let query_options = QueryOptions {
                 cwd: Some(working_directory.clone()),
                 model: mode.model.clone(),
@@ -143,8 +170,8 @@ pub async fn claude_remote_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) 
             };
 
             info!(
-                "[claudeRemoteLauncher] Spawning interactive claude SDK: continue={}, resume={:?}",
-                query_options.continue_conversation, query_options.resume
+                "[claudeRemoteLauncher] Spawning interactive claude SDK: resume={:?}, model={:?}",
+                query_options.resume, query_options.model
             );
             match query::query_interactive(query_options) {
                 Ok(qh) => {

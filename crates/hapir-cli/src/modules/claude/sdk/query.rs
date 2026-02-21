@@ -4,7 +4,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
-
+use hapir_infra::utils::process::kill_process_tree;
 use super::types::{PermissionResult, QueryOptions, SdkMessage};
 
 /// A running Claude query that yields SDK messages (--print mode).
@@ -91,6 +91,14 @@ impl InteractiveQuery {
     pub async fn close_stdin(&self) {
         let mut stdin = self.stdin.lock().await;
         let _ = stdin.shutdown().await;
+    }
+
+    /// Kill the child process tree (SIGTERM → wait → SIGKILL).
+    pub async fn kill(&self) {
+        let _ = self.stdin.lock().await.shutdown().await;
+        if let Some(pid) = self.child.id() {
+            let _ = kill_process_tree(pid, false).await;
+        }
     }
 
     async fn write_json_line(&self, value: &serde_json::Value) -> anyhow::Result<()> {
