@@ -134,7 +134,7 @@ pub async fn handle_cli_event(
             None
         }
         "terminal:error" => {
-            forward_terminal_event(conn_id, event, &data, conn_mgr, terminal_registry, false).await;
+            handle_terminal_error_from_cli(conn_id, &data, conn_mgr, terminal_registry).await;
             None
         }
         "terminal:exit" => {
@@ -727,6 +727,38 @@ async fn handle_terminal_exit_from_cli(
     terminal_registry.write().await.remove(&terminal_id);
 
     let msg = WsMessage::event("terminal:exit", data.clone());
+    let msg_str = serde_json::to_string(&msg).unwrap_or_default();
+    conn_mgr.send_to(&entry.socket_id, &msg_str).await;
+}
+
+/// Handle terminal:error from CLI — forward to webapp and remove from registry
+/// so the same terminal ID can be reused on retry.
+async fn handle_terminal_error_from_cli(
+    conn_id: &str,
+    data: &Value,
+    conn_mgr: &Arc<ConnectionManager>,
+    terminal_registry: &Arc<RwLock<TerminalRegistry>>,
+) {
+    let terminal_id = match data.get("terminalId").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return,
+    };
+
+    let entry = {
+        let reg = terminal_registry.read().await;
+        match reg.get(&terminal_id) {
+            Some(e) if e.cli_socket_id == conn_id => e.clone(),
+            _ => return,
+        }
+    };
+
+    if data.get("sessionId").and_then(|v| v.as_str()) != Some(&entry.session_id) {
+        return;
+    }
+
+    terminal_registry.write().await.remove(&terminal_id);
+
+    let msg = WsMessage::event("terminal:error", data.clone());
     let msg_str = serde_json::to_string(&msg).unwrap_or_default();
     conn_mgr.send_to(&entry.socket_id, &msg_str).await;
 }
