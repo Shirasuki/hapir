@@ -160,36 +160,6 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
         }
     }
 
-    // Start hook server for receiving Claude session notifications
-    let ws_for_hook = ws_client.clone();
-    let hook_server = start_hook_server(
-        Arc::new(move |sid, _data| {
-            let client = ws_for_hook.clone();
-            let claude_sid = sid;
-            tokio::spawn(async move {
-                debug!(
-                    "[runClaude] Hook server received Claude session ID: {}",
-                    claude_sid
-                );
-                let csid = claude_sid.clone();
-                let _ = client
-                    .update_metadata(move |mut metadata| {
-                        metadata.claude_session_id = Some(csid);
-                        metadata
-                    })
-                    .await;
-            });
-        }),
-        None,
-    )
-    .await?;
-
-    let hook_port = hook_server.port;
-    let hook_token = hook_server.token.clone();
-    debug!("[runClaude] Hook server started on port {}", hook_port);
-
-    let hook_settings_path = write_hook_settings(&session_id, hook_port, &hook_token);
-
     // Create RunnerLifecycle and register process handlers
     let ws_for_lifecycle = ws_client.clone();
     let lifecycle = RunnerLifecycle::new(RunnerLifecycleOptions {
@@ -213,7 +183,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
 
     let queue = Arc::new(MessageQueue2::new(compute_mode_hash));
 
-    // Create AgentSessionBase
+    // Create AgentSessionBase (before hook server so the callback can call on_session_found)
     let on_mode_change = create_mode_change_handler(ws_client.clone());
     let session_base = AgentSessionBase::new(AgentSessionBaseOptions {
         api: api.clone(),
@@ -233,6 +203,33 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
         permission_mode: bootstrap.session_info.permission_mode,
         model_mode: bootstrap.session_info.model_mode,
     });
+
+    // Start hook server for receiving Claude session notifications.
+    // The callback calls on_session_found so that session_id is stored
+    // and scanner callbacks are triggered — enabling --resume on mode switch.
+    let sb_for_hook = session_base.clone();
+    let hook_server = start_hook_server(
+        Arc::new(move |sid, _data| {
+            let sb = sb_for_hook.clone();
+            let claude_sid = sid;
+            tokio::spawn(async move {
+                debug!(
+                    "[runClaude] Hook server received Claude session ID: {}",
+                    claude_sid
+                );
+                // on_session_found stores the ID and updates metadata
+                sb.on_session_found(&claude_sid).await;
+            });
+        }),
+        None,
+    )
+    .await?;
+
+    let hook_port = hook_server.port;
+    let hook_token = hook_server.token.clone();
+    debug!("[runClaude] Hook server started on port {}", hook_port);
+
+    let hook_settings_path = write_hook_settings(&session_id, hook_port, &hook_token);
 
     // Create ClaudeSession wrapping the base
     let claude_session = Arc::new(ClaudeSession {
@@ -427,9 +424,16 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
                 debug!("[runClaude] abort RPC received");
                 let pid = cs.active_pid.load(Ordering::Relaxed);
                 if pid != 0 {
-                    debug!("[runClaude] Sending SIGTERM to PID {}", pid);
+                    debug!("[runClaude] Terminating PID {}", pid);
+                    #[cfg(unix)]
                     unsafe {
                         libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/PID", &pid.to_string(), "/T"])
+                            .spawn();
                     }
                 }
                 cs.pending_permissions.lock().await.clear();
@@ -442,6 +446,19 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
     // Set up terminal manager
     let terminal_mgr =
         crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
+
+    // Listen for hub-shutdown so the CLI exits cleanly (code 0) instead of
+    // being force-killed by the runner with exit code 1.
+    let lifecycle_for_shutdown = lifecycle.clone();
+    ws_client
+        .on("hub-shutdown", move |_data| {
+            let lc = lifecycle_for_shutdown.clone();
+            tokio::spawn(async move {
+                info!("[runClaude] Received hub-shutdown, exiting gracefully");
+                lc.cleanup_and_exit(Some(0)).await;
+            });
+        })
+        .await;
 
     // All RPC handlers registered — now connect the WebSocket.
     // This ensures the hub receives all rpc-register events before session-alive.

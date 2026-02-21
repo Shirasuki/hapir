@@ -205,9 +205,13 @@ pub async fn do_stop_session(state: &RunnerState, session_id: &str) -> Value {
                     }
                 }
             }
-            let _ = pid;
+            #[cfg(not(unix))]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .spawn();
+            }
         }
-        info!(session_id = %session_id, "session stopped");
         return json!({"success": true});
     }
 
@@ -435,6 +439,11 @@ pub async fn do_spawn_session(
                 Ok(())
             });
         }
+    }
+    // On Windows, create a new process group so the child survives runner shutdown
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
     }
 
     let mut codex_temp_dir: Option<std::path::PathBuf> = None;
@@ -715,7 +724,12 @@ pub async fn stop_all_sessions(state: &RunnerState) -> Vec<String> {
                     }
                 }
             }
-            let _ = pid;
+            #[cfg(not(unix))]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .spawn();
+            }
         }
         if session.webhook_received {
             ended_session_ids.push(session.session_id);

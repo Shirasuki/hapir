@@ -148,6 +148,13 @@ pub async fn stop_runner_gracefully(state_path: &Path, _lock_path: &Path) {
         }
         debug!(pid = pid, "force killed runner");
     }
+    #[cfg(not(unix))]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .spawn();
+        debug!(pid = pid, "force killed runner");
+    }
 }
 
 /// Wait for a process to die within a timeout. Returns true if process died.

@@ -2,7 +2,6 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
-use std::fs::{Permissions, set_permissions};
 use std::path::Path;
 
 #[derive(Serialize, Deserialize)]
@@ -40,7 +39,7 @@ pub fn get_or_create_jwt_secret(data_dir: &Path) -> Result<Vec<u8>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        set_permissions(&path, Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
 
     Ok(bytes.to_vec())

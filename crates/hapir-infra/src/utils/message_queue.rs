@@ -132,9 +132,15 @@ impl<T: Clone + Send + 'static> MessageQueue2<T> {
         self.notify.notify_one();
     }
 
-    /// Current number of messages in the queue.
-    pub async fn size(&self) -> usize {
-        self.inner.lock().await.queue.len()
+    /// Returns a future that resolves when a new message is pushed to the queue.
+    /// Does not consume the message.
+    pub async fn notified(&self) {
+        self.notify.notified().await;
+    }
+
+    /// Whether the queue has pending messages.
+    pub async fn has_messages(&self) -> bool {
+        !self.inner.lock().await.queue.is_empty()
     }
 
     /// Whether the queue has been closed.

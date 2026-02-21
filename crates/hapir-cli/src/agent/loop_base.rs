@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use super::session_base::{AgentSessionBase, SessionMode};
 use crate::terminal_utils;
-use tracing::debug;
+use tracing::{debug, info};
 
 /// Result of a loop iteration: switch to the other mode, or exit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +76,23 @@ pub async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
                 session.on_mode_change(mode).await;
             }
             SessionMode::Remote => {
-                let reason = run_remote(&session).await;
+                // Show remote mode banner and listen for Space key to switch back
+                terminal_utils::show_remote_banner();
+
+                let reason = tokio::select! {
+                    result = run_remote(&session) => result,
+                    _ = terminal_utils::wait_for_space_key() => {
+                        info!("[{log_tag}] Space key pressed, switching to local mode");
+                        // Close the queue temporarily so remote launcher exits,
+                        // then reset it for future use.
+                        session.queue.close().await;
+                        session.queue.reset().await;
+                        LoopResult::Switch
+                    }
+                };
+
+                terminal_utils::clear_remote_banner();
+
                 if reason == LoopResult::Exit {
                     return Ok(());
                 }

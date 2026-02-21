@@ -6,6 +6,39 @@ use tracing::debug;
 
 use super::types::{INTERNAL_CLAUDE_EVENT_TYPES, RawJsonLines};
 
+/// Compute the Claude projects directory for a given working directory.
+///
+/// Claude stores session files in `~/.claude/projects/<sanitized-cwd>/`.
+/// The `CLAUDE_CONFIG_DIR` env var overrides the default `~/.claude`.
+///
+/// The sanitized directory name is the absolute working directory path with
+/// every non-alphanumeric character replaced by `-`.  We intentionally avoid
+/// `canonicalize()` because on Windows it prepends `\\?\`, which would
+/// produce a different hash than what the Claude CLI uses.
+pub fn get_claude_project_dir(working_directory: &str) -> PathBuf {
+    // Make the path absolute without canonicalize (matches Node.js path.resolve)
+    let abs_path = if Path::new(working_directory).is_absolute() {
+        PathBuf::from(working_directory)
+    } else {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(working_directory)
+    };
+    let project_id: String = abs_path
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let claude_config_dir = std::env::var("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs_next::home_dir()
+                .unwrap_or_default()
+                .join(".claude")
+        });
+    claude_config_dir.join("projects").join(project_id)
+}
+
 /// A session scanner that watches `.jsonl` session files, parses lines,
 /// and deduplicates by UUID.
 pub struct SessionScanner {
@@ -24,9 +57,7 @@ impl SessionScanner {
         working_directory: &str,
         on_message: Box<dyn Fn(RawJsonLines) + Send + Sync>,
     ) -> Self {
-        // Claude stores session files in ~/.claude/projects/<hash>/
-        // For now, use the working directory as the project dir base
-        let project_dir = PathBuf::from(working_directory);
+        let project_dir = get_claude_project_dir(working_directory);
 
         Self {
             project_dir,
@@ -71,6 +102,17 @@ impl SessionScanner {
 
     /// Scan session files for new messages.
     pub async fn scan(&mut self) {
+        self.scan_inner(true).await;
+    }
+
+    /// Seed processed keys from existing session files without emitting messages.
+    /// Call this once before starting the polling loop to avoid re-emitting
+    /// old messages that the web UI already has.
+    pub async fn seed(&mut self) {
+        self.scan_inner(false).await;
+    }
+
+    async fn scan_inner(&mut self, emit: bool) {
         let mut files = Vec::new();
         for sid in &self.pending_sessions {
             files.push(self.session_file_path(sid));
@@ -93,7 +135,7 @@ impl SessionScanner {
                 Ok((events, total_lines)) => {
                     self.cursors.insert(file_path.clone(), total_lines);
                     for (key, message) in events {
-                        if self.processed_keys.insert(key) {
+                        if self.processed_keys.insert(key) && emit {
                             (self.on_message)(message);
                         }
                     }

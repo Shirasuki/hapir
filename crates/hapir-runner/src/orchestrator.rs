@@ -94,7 +94,7 @@ pub async fn start_sync(config: &Configuration) -> anyhow::Result<()> {
 
     let ws_holder: Arc<OnceLock<Arc<WsMachineClient>>> = Arc::new(OnceLock::new());
 
-    match connect_to_hub(config, port, start_time_ms, &state).await {
+    match connect_to_hub(config, port, start_time_ms, &state, shutdown_tx.clone()).await {
         Ok(ws) => {
             let _ = ws_holder.set(ws);
         }
@@ -103,6 +103,7 @@ pub async fn start_sync(config: &Configuration) -> anyhow::Result<()> {
             let holder = ws_holder.clone();
             let cfg = config.clone();
             let rs = state.clone();
+            let stx = shutdown_tx.clone();
             tokio::spawn(async move {
                 let retry_interval = Duration::from_secs(30);
                 loop {
@@ -111,7 +112,7 @@ pub async fn start_sync(config: &Configuration) -> anyhow::Result<()> {
                         break;
                     }
                     debug!("retrying hub connection...");
-                    match connect_to_hub(&cfg, port, start_time_ms, &rs).await {
+                    match connect_to_hub(&cfg, port, start_time_ms, &rs, stx.clone()).await {
                         Ok(ws) => {
                             info!("hub connection established (deferred)");
                             let _ = holder.set(ws);
@@ -273,6 +274,7 @@ async fn connect_to_hub(
     http_port: u16,
     start_time_ms: i64,
     runner_state: &RunnerState,
+    shutdown_tx: mpsc::Sender<ShutdownSource>,
 ) -> anyhow::Result<Arc<WsMachineClient>> {
     let initial_runner_state = json!({
         "status": "offline",
@@ -435,6 +437,16 @@ async fn connect_to_hub(
         handlers::register_all_handlers(ws.as_ref(), &cwd).await;
     }
 
+    // Listen for hub-shutdown event to trigger runner shutdown
+    ws.on_event("hub-shutdown", move |_data| {
+        let tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            info!("received hub-shutdown event, initiating runner shutdown");
+            let _ = tx.send(ShutdownSource::HapiApp).await;
+        });
+    })
+    .await;
+
     ws.connect_and_wait(Duration::from_secs(10))
         .await?;
 
@@ -470,16 +482,24 @@ fn epoch_ms() -> i64 {
 
 /// Format current time as a human-readable string.
 fn format_locale_time() -> String {
-    std::process::Command::new("date")
-        .arg("+%m/%d/%Y, %I:%M:%S %p")
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| epoch_ms().to_string())
+    #[cfg(unix)]
+    {
+        std::process::Command::new("date")
+            .arg("+%m/%d/%Y, %I:%M:%S %p")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| epoch_ms().to_string())
+    }
+    #[cfg(not(unix))]
+    {
+        // On Windows, `date` is not available; fall back to epoch ms.
+        epoch_ms().to_string()
+    }
 }

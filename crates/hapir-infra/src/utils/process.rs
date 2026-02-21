@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::Result;
 
 /// Re-export from persistence for convenience.
@@ -28,14 +26,24 @@ pub async fn kill_process(pid: u32, force: bool) -> Result<bool> {
 
     #[cfg(not(unix))]
     {
-        let _ = (pid, force);
-        Ok(false)
+        // On Windows, use taskkill. /F for force kill, /T to kill child processes.
+        let mut cmd = std::process::Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/T"]);
+        if force {
+            cmd.arg("/F");
+        }
+        match cmd.output() {
+            Ok(output) => Ok(output.status.success()),
+            Err(_) => Ok(false),
+        }
     }
 }
 
 /// Wait for a process to die, escalating to SIGKILL if SIGTERM
 /// doesn't work within 2 seconds.
+#[cfg(unix)]
 async fn wait_for_process_to_die(pid: u32, force: bool) {
+    use std::time::Duration;
     let max_wait = Duration::from_millis(2000);
     let poll_interval = Duration::from_millis(20);
     let mut waited = Duration::ZERO;
@@ -104,8 +112,14 @@ pub async fn kill_process_tree(pid: u32, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Stub for non-Unix platforms.
+/// Kill a process and all its descendants on Windows via taskkill /T.
 #[cfg(not(unix))]
-pub async fn kill_process_tree(_pid: u32, _force: bool) -> Result<()> {
+pub async fn kill_process_tree(pid: u32, force: bool) -> Result<()> {
+    let mut cmd = std::process::Command::new("taskkill");
+    cmd.args(["/PID", &pid.to_string(), "/T"]);
+    if force {
+        cmd.arg("/F");
+    }
+    let _ = cmd.output();
     Ok(())
 }

@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
-use std::fs::Permissions;
 use std::path::Path;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -43,7 +42,7 @@ impl Store {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(dir, Permissions::from_mode(0o700));
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
             }
         }
 
@@ -61,7 +60,7 @@ impl Store {
             use std::os::unix::fs::PermissionsExt;
             for suffix in &["", "-wal", "-shm"] {
                 let file_path = format!("{path}{suffix}");
-                let _ = std::fs::set_permissions(&file_path, Permissions::from_mode(0o600));
+                let _ = std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o600));
             }
         }
 

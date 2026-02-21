@@ -64,12 +64,26 @@ fn resolve_env_number(name: &str, fallback: u64) -> u64 {
 }
 
 fn resolve_shell() -> String {
-    if let Ok(shell) = std::env::var("SHELL")
-        && !shell.is_empty()
+    // Unix: prefer $SHELL
+    #[cfg(unix)]
     {
-        return shell;
+        if let Ok(shell) = std::env::var("SHELL")
+            && !shell.is_empty()
+        {
+            return shell;
+        }
+        "/bin/bash".to_string()
     }
-    "/bin/bash".to_string()
+    // Windows: prefer $COMSPEC (usually cmd.exe), fall back to powershell
+    #[cfg(windows)]
+    {
+        if let Ok(shell) = std::env::var("COMSPEC")
+            && !shell.is_empty()
+        {
+            return shell;
+        }
+        "powershell.exe".to_string()
+    }
 }
 
 fn build_filtered_env() -> Vec<(String, String)> {
