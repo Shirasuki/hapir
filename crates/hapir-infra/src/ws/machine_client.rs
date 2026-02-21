@@ -250,6 +250,15 @@ impl WsMachineClient {
         self.ws.close().await;
     }
 
+    /// Register an event handler on the underlying WebSocket client.
+    pub async fn on_event(
+        &self,
+        event: impl Into<String>,
+        handler: impl Fn(Value) + Send + Sync + 'static,
+    ) {
+        self.ws.on(event, handler).await;
+    }
+
     #[allow(dead_code)]
     pub fn machine_id(&self) -> &str {
         &self.machine_id

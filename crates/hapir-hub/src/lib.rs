@@ -184,6 +184,12 @@ pub async fn run_hub() -> anyhow::Result<()> {
     // Wait for OS signal
     shutdown_signal().await;
 
+    // Notify all machine-scoped connections (runners) to shut down
+    info!("notifying runners to shut down");
+    conn_mgr.broadcast_hub_shutdown().await;
+    // Give runners a moment to process the shutdown event
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
     // Actively close all WebSocket connections
     info!("closing all WebSocket connections");
     conn_mgr.close_all().await;

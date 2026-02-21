@@ -140,6 +140,25 @@ impl ConnectionManager {
         }
     }
 
+    /// Send a `hub-shutdown` event to all machine-scoped connections (runners).
+    /// This tells runners to gracefully stop themselves and their child sessions.
+    pub async fn broadcast_hub_shutdown(&self) {
+        let msg = serde_json::json!({
+            "event": "hub-shutdown",
+            "data": {}
+        });
+        let msg_str = msg.to_string();
+        let rooms = self.machine_rooms.read().await;
+        let conns = self.connections.read().await;
+        for members in rooms.values() {
+            for member_id in members {
+                if let Some(conn) = conns.get(member_id) {
+                    let _ = conn.tx.send(WsOutMessage::Text(msg_str.clone()));
+                }
+            }
+        }
+    }
+
     /// Broadcast to all connections in a session room, optionally excluding a sender.
     pub async fn broadcast_to_session(&self, session_id: &str, msg: &str, exclude: Option<&str>) {
         let rooms = self.session_rooms.read().await;
