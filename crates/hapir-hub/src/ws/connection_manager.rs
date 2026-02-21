@@ -140,22 +140,18 @@ impl ConnectionManager {
         }
     }
 
-    /// Send a `hub-shutdown` event to all machine-scoped connections (runners).
-    /// This tells runners to gracefully stop themselves and their child sessions.
+    /// Send a `hub-shutdown` event to all connections (runners and sessions).
+    /// Runners use this to gracefully stop child sessions; CLI sessions use it
+    /// to exit cleanly before the WebSocket is closed.
     pub async fn broadcast_hub_shutdown(&self) {
         let msg = serde_json::json!({
             "event": "hub-shutdown",
             "data": {}
         });
         let msg_str = msg.to_string();
-        let rooms = self.machine_rooms.read().await;
         let conns = self.connections.read().await;
-        for members in rooms.values() {
-            for member_id in members {
-                if let Some(conn) = conns.get(member_id) {
-                    let _ = conn.tx.send(WsOutMessage::Text(msg_str.clone()));
-                }
-            }
+        for conn in conns.values() {
+            let _ = conn.tx.send(WsOutMessage::Text(msg_str.clone()));
         }
     }
 

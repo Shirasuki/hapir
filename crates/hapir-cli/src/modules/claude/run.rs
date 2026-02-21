@@ -447,6 +447,19 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
     let terminal_mgr =
         crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
 
+    // Listen for hub-shutdown so the CLI exits cleanly (code 0) instead of
+    // being force-killed by the runner with exit code 1.
+    let lifecycle_for_shutdown = lifecycle.clone();
+    ws_client
+        .on("hub-shutdown", move |_data| {
+            let lc = lifecycle_for_shutdown.clone();
+            tokio::spawn(async move {
+                info!("[runClaude] Received hub-shutdown, exiting gracefully");
+                lc.cleanup_and_exit(Some(0)).await;
+            });
+        })
+        .await;
+
     // All RPC handlers registered — now connect the WebSocket.
     // This ensures the hub receives all rpc-register events before session-alive.
     ws_client.connect().await;
