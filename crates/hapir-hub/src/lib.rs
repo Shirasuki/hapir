@@ -9,7 +9,6 @@ pub mod ws;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::signal::unix::SignalKind;
 use tokio::sync::{Notify, RwLock};
 use tracing::info;
 
