@@ -27,6 +27,14 @@ pub trait RpcTransport: Send + Sync {
         &self,
         method: &str,
     ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>>;
+
+    /// Check whether any WebSocket connection exists for the given scope
+    /// (session or machine room). Used to fast-fail RPC calls when no CLI
+    /// is connected — polling is pointless if no connection can register a handler.
+    fn has_scope_connection(
+        &self,
+        scope: &str,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>>;
 }
 
 // --- Response types ---
@@ -130,7 +138,6 @@ impl RpcGateway {
 
             let deadline = Instant::now() + MAX_WAIT;
 
-            // Fast path: if already registered, skip the polling loop entirely.
             loop {
                 match self.transport.rpc_call(method, params.clone()).await {
                     Ok(rx) => break rx,
@@ -141,6 +148,15 @@ impl RpcGateway {
                         if Instant::now() >= deadline {
                             warn!(method, "RPC handler not registered after waiting");
                             bail!("RPC handler not registered: {method}");
+                        }
+                        // Fast-fail: if no WebSocket connection exists for this
+                        // scope (session/machine), no handler can ever register,
+                        // so polling would just waste heap memory.
+                        if let Some((scope, _)) = method.split_once(':') {
+                            if !self.transport.has_scope_connection(scope).await {
+                                debug!(method, scope, "no active connection for scope, skipping poll");
+                                bail!("RPC handler not registered (no connection): {method}");
+                            }
                         }
                         debug!(method, "RPC handler not yet registered, waiting…");
                         tokio::time::sleep(POLL_INTERVAL).await;

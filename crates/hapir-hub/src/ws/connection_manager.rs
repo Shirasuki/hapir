@@ -194,6 +194,27 @@ impl ConnectionManager {
         None
     }
 
+    /// Check whether any connection exists in the session or machine room for the given scope.
+    pub async fn has_scope_connection(&self, scope: &str) -> bool {
+        {
+            let rooms = self.session_rooms.read().await;
+            if let Some(members) = rooms.get(scope) {
+                if !members.is_empty() {
+                    return true;
+                }
+            }
+        }
+        {
+            let rooms = self.machine_rooms.read().await;
+            if let Some(members) = rooms.get(scope) {
+                if !members.is_empty() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     // --- RPC ---
 
     pub async fn rpc_register(&self, conn_id: &str, method: &str) {
@@ -283,6 +304,16 @@ impl RpcTransport for ConnectionManager {
         let method = method.to_string();
         Box::pin(async move {
             self.rpc_registry.read().await.get_conn_id_for_method(&method).is_some()
+        })
+    }
+
+    fn has_scope_connection(
+        &self,
+        scope: &str,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        let scope = scope.to_string();
+        Box::pin(async move {
+            self.has_scope_connection(&scope).await
         })
     }
 }
