@@ -5,4 +5,4 @@ import type { ModelMode } from "./ModelMode";
 import type { PermissionMode } from "./PermissionMode";
 import type { TodoItem } from "./TodoItem";
 
-export type Session = { id: string, namespace: string, seq: number, createdAt: number, updatedAt: number, active: boolean, activeAt: number, metadata: Metadata | null, metadataVersion: number, agentState: AgentState | null, agentStateVersion: number, thinking: boolean, thinkingAt: number, todos: Array<TodoItem> | null, permissionMode: PermissionMode | null, modelMode: ModelMode | null, };
+export type Session = { id: string, namespace: string, seq: number, createdAt: number, updatedAt: number, active: boolean, activeAt: number, metadata: Metadata | null, metadataVersion: number, agentState: AgentState | null, agentStateVersion: number, thinking: boolean, thinkingAt: number, thinkingStatus: string | null, todos: Array<TodoItem> | null, permissionMode: PermissionMode | null, modelMode: ModelMode | null, };
