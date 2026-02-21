@@ -7,17 +7,13 @@ use serde_json::Value;
 use tokio::sync::{oneshot, Mutex};
 use tracing::debug;
 
-use crate::agent::types::{
+use crate::types::{
     AgentBackend, AgentSessionConfig, OnPermissionRequestFn, OnUpdateFn,
     PermissionOption, PermissionRequest, PermissionResponse, PromptContent,
 };
 
 use super::message_handler::AcpMessageHandler;
-use super::transport::{AcpStdioTransport, StderrErrorHandler};
-
-// ---------------------------------------------------------------------------
-// Retry helper
-// ---------------------------------------------------------------------------
+use crate::transport::{AcpStdioTransport, StderrErrorHandler};
 
 async fn with_retry<F, Fut>(max_attempts: u32, f: F) -> Result<Value, String>
 where
@@ -46,19 +42,10 @@ where
     Err(last_err)
 }
 
-// ---------------------------------------------------------------------------
-// Pending permission
-// ---------------------------------------------------------------------------
-
 struct PendingPermission {
     tx: oneshot::Sender<Value>,
 }
 
-// ---------------------------------------------------------------------------
-// AcpSdkBackend
-// ---------------------------------------------------------------------------
-
-/// ACP backend that communicates with an agent process via JSON-RPC over stdio.
 pub struct AcpSdkBackend {
     command: String,
     args: Vec<String>,
@@ -95,12 +82,10 @@ impl AcpSdkBackend {
         }
     }
 
-    /// Whether a prompt is currently being processed.
     pub async fn processing_message(&self) -> bool {
         *self.is_processing.lock().await
     }
 
-    /// Wait for any in-progress response to complete.
     pub async fn wait_for_response_complete(&self) {
         if !*self.is_processing.lock().await {
             return;
@@ -223,7 +208,6 @@ impl AcpSdkBackend {
             options,
         };
 
-        // Notify permission handler
         let handler = self.permission_handler.lock().await;
         if let Some(h) = handler.as_ref() {
             h(request);
@@ -233,7 +217,6 @@ impl AcpSdkBackend {
         }
         drop(handler);
 
-        // Wait for response via oneshot
         let (tx, rx) = oneshot::channel();
         self.pending_permissions
             .lock()
@@ -258,7 +241,6 @@ impl AgentBackend for AcpSdkBackend {
                 self.env.clone(),
             );
 
-            // Set up notification handler
             let msg_for_notif = self.message_handler.clone();
 
             transport
@@ -272,7 +254,6 @@ impl AgentBackend for AcpSdkBackend {
                             Some(u) => u.clone(),
                             None => return,
                         };
-                        // We can't await in a sync closure, so use try_lock
                         if let Ok(mut handler) = msg_for_notif.try_lock()
                             && let Some(h) = handler.as_mut()
                         {
@@ -282,10 +263,8 @@ impl AgentBackend for AcpSdkBackend {
                 })
                 .await;
 
-            // Store transport before registering handlers
             *self.transport.lock().await = Some(transport.clone());
 
-            // Register the permission request handler
             let backend_pending = self.pending_permissions.clone();
 
             transport
@@ -294,8 +273,6 @@ impl AgentBackend for AcpSdkBackend {
                     Arc::new(move |params: Value, _request_id: Value| {
                         let pending = backend_pending.clone();
                         Box::pin(async move {
-                            // Simplified: just create a pending entry and wait
-                            // The full permission flow is handled by respond_to_permission
                             let obj = params.as_object();
                             let tool_call = obj
                                 .and_then(|o| o.get("toolCall"))
@@ -322,7 +299,6 @@ impl AgentBackend for AcpSdkBackend {
                 )
                 .await;
 
-            // Send initialize request with retry
             let t = transport.clone();
             let response = with_retry(3, || {
                 let t = t.clone();
@@ -460,11 +436,10 @@ impl AgentBackend for AcpSdkBackend {
                         "sessionId": session_id,
                         "prompt": prompt_content,
                     }),
-                    u64::MAX, // No timeout for prompts
+                    u64::MAX,
                 )
                 .await;
 
-            // Flush and cleanup
             if let Ok(ref response) = result {
                 let stop_reason = response
                     .as_object()
@@ -476,14 +451,10 @@ impl AgentBackend for AcpSdkBackend {
                     if let Some(h) = handler.as_mut() {
                         h.flush_text();
                     }
-                    // The on_update was moved into the handler, so we can't call it directly.
-                    // The turn_complete message is emitted through the handler's on_message.
-                    // We need a different approach - emit through the handler.
                     drop(handler);
                 }
             }
 
-            // Final flush
             {
                 let mut handler = self.message_handler.lock().await;
                 if let Some(h) = handler.as_mut() {
@@ -546,7 +517,6 @@ impl AgentBackend for AcpSdkBackend {
     }
 
     fn on_permission_request(&self, handler: OnPermissionRequestFn) {
-        // Use blocking_lock since this is called from a sync context
         let mut h = self.permission_handler.blocking_lock();
         *h = Some(handler);
     }

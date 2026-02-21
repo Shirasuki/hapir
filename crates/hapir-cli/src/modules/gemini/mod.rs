@@ -6,7 +6,7 @@ use tracing::{debug, error, warn};
 
 use hapir_shared::schemas::StartedBy as SharedStartedBy;
 
-use crate::agent::backends::acp::backend::AcpSdkBackend;
+use hapir_acp::acp_sdk::backend::AcpSdkBackend;
 use crate::agent::local_launch_policy::{
     get_local_launch_exit_reason, LocalLaunchContext, LocalLaunchExitReason,
 };
@@ -16,7 +16,7 @@ use crate::agent::runner_lifecycle::{
 };
 use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions, SessionMode};
 use crate::agent::session_factory::{bootstrap_session, SessionBootstrapOptions};
-use crate::agent::types::{AgentBackend, AgentMessage, AgentSessionConfig, PromptContent};
+use hapir_acp::types::{AgentBackend, AgentMessage, AgentSessionConfig, PromptContent};
 use crate::config::Configuration;
 use crate::utils::message_queue::MessageQueue2;
 use crate::ws::session_client::WsSessionClient;

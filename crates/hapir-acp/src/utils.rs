@@ -4,7 +4,6 @@ use serde_json::Value;
 ///
 /// Priority: title > rawInput.name > rawInput.tool > kind > "Tool"
 pub fn derive_tool_name(title: Option<&str>, kind: Option<&str>, raw_input: Option<&Value>) -> String {
-    // Check title first
     if let Some(t) = title {
         let trimmed = t.trim();
         if !trimmed.is_empty() {
@@ -12,7 +11,6 @@ pub fn derive_tool_name(title: Option<&str>, kind: Option<&str>, raw_input: Opti
         }
     }
 
-    // Check rawInput.name and rawInput.tool
     if let Some(Value::Object(obj)) = raw_input {
         if let Some(Value::String(name)) = obj.get("name") {
             let trimmed = name.trim();
@@ -28,7 +26,6 @@ pub fn derive_tool_name(title: Option<&str>, kind: Option<&str>, raw_input: Opti
         }
     }
 
-    // Check kind
     if let Some(k) = kind {
         let trimmed = k.trim();
         if !trimmed.is_empty() {

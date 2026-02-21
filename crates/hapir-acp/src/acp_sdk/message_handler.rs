@@ -2,16 +2,12 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::agent::types::{
+use crate::types::{
     AgentMessage, PlanItem, PlanItemPriority, PlanItemStatus, ToolCallStatus, ToolResultStatus,
 };
-use crate::agent::utils::derive_tool_name;
+use crate::utils::derive_tool_name;
 
 use super::constants;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 fn as_str(v: &Value) -> Option<&str> {
     v.as_str()
@@ -83,14 +79,6 @@ fn normalize_plan_entries(entries: &Value) -> Vec<PlanItem> {
     items
 }
 
-// ---------------------------------------------------------------------------
-// AcpMessageHandler
-// ---------------------------------------------------------------------------
-
-/// Parses ACP session update notifications into `AgentMessage` events.
-///
-/// Buffers text chunks with deduplication logic and handles tool call
-/// lifecycle events (creation, updates, completion/failure).
 pub struct AcpMessageHandler {
     tool_calls: HashMap<String, ToolCallInfo>,
     buffered_text: String,
@@ -118,7 +106,6 @@ impl AcpMessageHandler {
         }
     }
 
-    /// Emit any buffered text as an `AgentMessage::Text`.
     pub fn flush_text(&mut self) {
         if self.buffered_text.is_empty() {
             return;
@@ -127,7 +114,6 @@ impl AcpMessageHandler {
         (self.on_message)(AgentMessage::Text { text });
     }
 
-    /// Send a text delta immediately for streaming.
     fn send_text_delta(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -158,7 +144,6 @@ impl AcpMessageHandler {
         self.buffered_text = text.to_string();
     }
 
-    /// Finalize the current streaming message.
     fn finalize_stream(&mut self) {
         if let Some(message_id) = self.streaming_message_id.take() {
             (self.on_message)(AgentMessage::TextDelta {
@@ -170,7 +155,6 @@ impl AcpMessageHandler {
         }
     }
 
-    /// Process a single session update notification.
     pub fn handle_update(&mut self, update: &Value) {
         let obj = match update.as_object() {
             Some(o) => o,
@@ -190,9 +174,7 @@ impl AcpMessageHandler {
                     self.send_text_delta(text);
                 }
             }
-            constants::AGENT_THOUGHT_CHUNK => {
-                // Silently ignored
-            }
+            constants::AGENT_THOUGHT_CHUNK => {}
             constants::TOOL_CALL => {
                 self.finalize_stream();
                 self.flush_text();

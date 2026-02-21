@@ -880,6 +880,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hapir-acp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "hapir-cli"
 version = "0.1.0"
 dependencies = [
@@ -890,6 +902,7 @@ dependencies = [
  "clap",
  "dirs-next",
  "futures",
+ "hapir-acp",
  "hapir-shared",
  "hex",
  "libc",

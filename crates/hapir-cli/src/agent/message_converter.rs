@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::types::{AgentMessage, PlanItem};
+use hapir_acp::types::{AgentMessage, PlanItem};
 
 /// Codex-compatible message format.
 #[derive(Debug, Clone, Serialize, Deserialize)]

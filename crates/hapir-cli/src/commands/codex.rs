@@ -40,5 +40,13 @@ pub async fn run(args: CodexArgs) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    crate::modules::codex::run(&working_directory, runner_port).await
+    crate::modules::codex::run(
+        &working_directory,
+        runner_port,
+        args.started_by.as_deref(),
+        args.hapir_starting_mode.as_deref(),
+        args.model.as_deref(),
+        args.yolo,
+    )
+    .await
 }

@@ -62,8 +62,6 @@ pub enum PlanItemStatus {
     Completed,
 }
 
-// --- Tool call status ---
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
@@ -79,8 +77,6 @@ pub enum ToolResultStatus {
     Completed,
     Failed,
 }
-
-// --- Agent message ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -116,8 +112,6 @@ pub enum AgentMessage {
     #[serde(rename = "error")]
     Error { message: String },
 }
-
-// --- Permission types ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,8 +150,6 @@ pub enum PermissionResponse {
     Cancelled,
 }
 
-// --- Agent backend trait ---
-
 pub type OnUpdateFn = Box<dyn Fn(AgentMessage) + Send + Sync>;
 pub type OnPermissionRequestFn = Box<dyn Fn(PermissionRequest) + Send + Sync>;
 
@@ -192,7 +184,5 @@ pub trait AgentBackend: Send + Sync {
 
     fn disconnect(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
 }
-
-// --- Factory type ---
 
 pub type AgentBackendFactory = Box<dyn Fn() -> Box<dyn AgentBackend> + Send + Sync>;

@@ -1,13 +1,12 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
 
 use hapir_shared::schemas::StartedBy as SharedStartedBy;
 
+use hapir_acp::codex_app_server::backend::CodexAppServerBackend;
 use crate::agent::local_launch_policy::{
     get_local_launch_exit_reason, LocalLaunchContext, LocalLaunchExitReason,
 };
@@ -19,8 +18,9 @@ use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions, Sess
 use crate::agent::session_factory::{bootstrap_session, SessionBootstrapOptions};
 use crate::config::Configuration;
 use crate::utils::message_queue::MessageQueue2;
+use crate::ws::session_client::WsSessionClient;
+use hapir_acp::types::{AgentBackend, AgentMessage, AgentSessionConfig, PromptContent};
 
-/// The mode type for Codex sessions.
 #[derive(Debug, Clone, Default)]
 pub struct CodexMode {
     pub permission_mode: Option<String>,
@@ -28,7 +28,6 @@ pub struct CodexMode {
     pub collaboration_mode: Option<String>,
 }
 
-/// Compute a deterministic hash of the codex mode for queue batching.
 fn compute_mode_hash(mode: &CodexMode) -> String {
     let mut hasher = Sha256::new();
     hasher.update(mode.permission_mode.as_deref().unwrap_or(""));
@@ -39,22 +38,98 @@ fn compute_mode_hash(mode: &CodexMode) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Entry point for running a Codex agent session.
-pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::Result<()> {
+fn resolve_starting_mode(mode_str: Option<&str>, started_by: SharedStartedBy) -> SessionMode {
+    if let Some(s) = mode_str {
+        match s {
+            "remote" => return SessionMode::Remote,
+            "local" => return SessionMode::Local,
+            _ => {}
+        }
+    }
+    match started_by {
+        SharedStartedBy::Terminal => SessionMode::Local,
+        SharedStartedBy::Runner => SessionMode::Remote,
+    }
+}
+
+async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
+    match msg {
+        AgentMessage::Text { text } => {
+            ws.send_message(serde_json::json!({
+                "type": "assistant",
+                "message": { "role": "assistant", "content": text },
+            }))
+            .await;
+        }
+        AgentMessage::TextDelta {
+            message_id,
+            text,
+            is_final,
+        } => {
+            ws.send_message_delta(&message_id, &text, is_final).await;
+        }
+        AgentMessage::ToolCall {
+            id,
+            name,
+            input,
+            status,
+        } => {
+            ws.send_message(serde_json::json!({
+                "type": "tool_call",
+                "toolCall": { "id": id, "name": name, "input": input, "status": status },
+            }))
+            .await;
+        }
+        AgentMessage::ToolResult { id, output, status } => {
+            ws.send_message(serde_json::json!({
+                "type": "tool_result",
+                "toolResult": { "id": id, "output": output, "status": status },
+            }))
+            .await;
+        }
+        AgentMessage::Plan { items } => {
+            ws.send_message(serde_json::json!({
+                "type": "plan",
+                "entries": items,
+            }))
+            .await;
+        }
+        AgentMessage::Error { message } => {
+            ws.send_message(serde_json::json!({
+                "type": "error",
+                "message": message,
+            }))
+            .await;
+        }
+        AgentMessage::TurnComplete { .. } => {}
+    }
+}
+
+pub async fn run(
+    working_directory: &str,
+    runner_port: Option<u16>,
+    started_by: Option<&str>,
+    hapir_starting_mode: Option<&str>,
+    model: Option<&str>,
+    yolo: bool,
+) -> anyhow::Result<()> {
     let working_directory = working_directory.to_string();
-    let starting_mode = SessionMode::Local;
+    let started_by = match started_by {
+        Some("runner") => SharedStartedBy::Runner,
+        _ => SharedStartedBy::Terminal,
+    };
+    let starting_mode = resolve_starting_mode(hapir_starting_mode, started_by);
 
     debug!(
-        "[runCodex] Starting in {} (mode={:?})",
-        working_directory, starting_mode
+        "[runCodex] Starting in {} (startedBy={:?}, mode={:?})",
+        working_directory, started_by, starting_mode
     );
 
-    // Bootstrap session
     let config = Configuration::create()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "codex".to_string(),
-            started_by: Some(SharedStartedBy::Terminal),
+            started_by: Some(started_by),
             working_directory: Some(working_directory.clone()),
             tag: None,
             agent_state: Some(serde_json::json!({
@@ -66,7 +141,6 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
     .await?;
 
     let ws_client = bootstrap.ws_client.clone();
-    let api = bootstrap.api.clone();
     let session_id = bootstrap.session_info.id.clone();
     let log_path = config
         .logs_dir
@@ -76,7 +150,6 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
 
     debug!("[runCodex] Session bootstrapped: {}", session_id);
 
-    // Notify runner that this session has started
     if let Some(port) = runner_port {
         let pid = std::process::id();
         if let Err(e) = crate::runner::control_client::notify_session_started(
@@ -90,7 +163,6 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         }
     }
 
-    // Create RunnerLifecycle and register process handlers
     let lifecycle = RunnerLifecycle::new(RunnerLifecycleOptions {
         ws_client: ws_client.clone(),
         log_tag: "runCodex".to_string(),
@@ -100,17 +172,17 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
     });
     lifecycle.register_process_handlers();
 
-    // Set controlledByUser on session
     set_controlled_by_user(&ws_client, starting_mode).await;
 
-    // Create MessageQueue2<CodexMode> with mode hash
-    let initial_mode = CodexMode::default();
+    let initial_mode = CodexMode {
+        model: model.map(|s| s.to_string()),
+        ..Default::default()
+    };
     let queue = Arc::new(MessageQueue2::new(compute_mode_hash));
 
-    // Create AgentSessionBase
     let on_mode_change = create_mode_change_handler(ws_client.clone());
     let session_base = AgentSessionBase::new(AgentSessionBaseOptions {
-        api: api.clone(),
+        api: bootstrap.api.clone(),
         ws_client: ws_client.clone(),
         path: working_directory.clone(),
         log_path,
@@ -128,7 +200,17 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         model_mode: bootstrap.session_info.model_mode,
     });
 
-    // Register on-user-message RPC handler
+    // Build codex app-server args
+    let mut codex_args = vec!["app-server".to_string()];
+    if yolo {
+        codex_args.push("--full-auto".to_string());
+    }
+    let backend = Arc::new(CodexAppServerBackend::new(
+        "codex".to_string(),
+        codex_args,
+        None,
+    ));
+
     let queue_for_rpc = queue.clone();
     let current_mode = Arc::new(Mutex::new(initial_mode));
     let mode_for_rpc = current_mode.clone();
@@ -151,7 +233,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
 
                 let trimmed = message.trim();
                 if trimmed == "/compact" || trimmed == "/clear" {
-                    debug!("[runCodex] Received {} command, isolate-and-clear", trimmed);
+                    debug!("[runCodex] Received {} command", trimmed);
                     q.push_isolate_and_clear(message, current).await;
                 } else {
                     q.push(message, current).await;
@@ -162,7 +244,6 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         })
         .await;
 
-    // Register set-session-config RPC handler
     let mode_for_config = current_mode.clone();
     ws_client
         .register_rpc("set-session-config", move |params| {
@@ -182,35 +263,31 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         })
         .await;
 
-    // Register killSession RPC handler
     let queue_for_kill = queue.clone();
+    let backend_for_kill = backend.clone();
     ws_client
         .register_rpc("killSession", move |_params| {
             let q = queue_for_kill.clone();
+            let b = backend_for_kill.clone();
             Box::pin(async move {
-                debug!("[runCodex] killSession RPC received, closing queue");
+                debug!("[runCodex] killSession RPC received");
                 q.close().await;
+                let _ = b.disconnect().await;
                 serde_json::json!({"ok": true})
             })
         })
         .await;
 
-    // Shared PID for the currently running codex process
-    let active_pid = Arc::new(AtomicU32::new(0));
-
-    // Register abort RPC handler
-    let pid_for_abort = active_pid.clone();
+    let backend_for_abort = backend.clone();
     let sb_for_abort = session_base.clone();
     ws_client
         .register_rpc("abort", move |_params| {
-            let pid_ref = pid_for_abort.clone();
+            let b = backend_for_abort.clone();
             let sb = sb_for_abort.clone();
             Box::pin(async move {
                 debug!("[runCodex] abort RPC received");
-                let pid = pid_ref.load(Ordering::Relaxed);
-                if pid != 0 {
-                    debug!("[runCodex] Sending SIGTERM to PID {}", pid);
-                    unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                if let Some(sid) = sb.session_id.lock().await.clone() {
+                    let _ = b.cancel_prompt(&sid).await;
                 }
                 sb.on_thinking_change(false).await;
                 serde_json::json!({"ok": true})
@@ -218,42 +295,34 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         })
         .await;
 
-    // Set up terminal manager
-    let terminal_mgr = crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
+    let terminal_mgr =
+        crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
 
-    // All RPC handlers registered — now connect the WebSocket.
     ws_client.connect().await;
 
-    // Enter the main local/remote loop
-    let wd_local = working_directory.clone();
-    let wd_remote = working_directory.clone();
-    let queue_remote = queue.clone();
-    let ws_remote = ws_client.clone();
-    let pid_remote = active_pid.clone();
-    let sb_remote = session_base.clone();
+    let sb_for_local = session_base.clone();
+    let sb_for_remote = session_base.clone();
+    let backend_for_remote = backend.clone();
 
     let loop_result = run_local_remote_session(LoopOptions {
         session: session_base.clone(),
         starting_mode: Some(starting_mode),
         log_tag: "runCodex".to_string(),
         run_local: Box::new(move |_base| {
-            let wd = wd_local.clone();
-            Box::pin(async move { codex_local_launcher(&wd).await })
+            let sb = sb_for_local.clone();
+            Box::pin(async move { codex_local_launcher(&sb).await })
         }),
         run_remote: Box::new(move |_base| {
-            let wd = wd_remote.clone();
-            let q = queue_remote.clone();
-            let ws = ws_remote.clone();
-            let pid = pid_remote.clone();
-            let sb = sb_remote.clone();
-            Box::pin(async move { codex_remote_launcher(&wd, &q, &ws, &pid, &sb).await })
+            let sb = sb_for_remote.clone();
+            let b = backend_for_remote.clone();
+            Box::pin(async move { codex_remote_launcher(&sb, &b).await })
         }),
         on_session_ready: None,
     })
     .await;
 
-    // Cleanup
     debug!("[runCodex] Main loop exited");
+    let _ = backend.disconnect().await;
     terminal_mgr.close_all().await;
     lifecycle.cleanup().await;
 
@@ -265,12 +334,12 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
     Ok(())
 }
 
-/// Local launcher: spawns the `codex` CLI process interactively.
-async fn codex_local_launcher(working_directory: &str) -> LoopResult {
+async fn codex_local_launcher(session: &Arc<AgentSessionBase<CodexMode>>) -> LoopResult {
+    let working_directory = session.path.clone();
     debug!("[codexLocalLauncher] Starting in {}", working_directory);
 
     let mut cmd = tokio::process::Command::new("codex");
-    cmd.current_dir(working_directory);
+    cmd.current_dir(&working_directory);
 
     match cmd.status().await {
         Ok(status) => {
@@ -278,13 +347,22 @@ async fn codex_local_launcher(working_directory: &str) -> LoopResult {
         }
         Err(e) => {
             warn!("[codexLocalLauncher] Failed to spawn codex: {}", e);
+            session
+                .ws_client
+                .send_message(serde_json::json!({
+                    "type": "error",
+                    "message": format!("Failed to launch codex CLI: {}", e),
+                }))
+                .await;
         }
     }
 
     let exit_reason = get_local_launch_exit_reason(&LocalLaunchContext {
         started_by: Some(SharedStartedBy::Terminal),
-        starting_mode: Some(SessionMode::Local),
+        starting_mode: Some(*session.mode.lock().await),
     });
+
+    debug!("[codexLocalLauncher] Exit reason: {:?}", exit_reason);
 
     match exit_reason {
         LocalLaunchExitReason::Switch => LoopResult::Switch,
@@ -292,19 +370,51 @@ async fn codex_local_launcher(working_directory: &str) -> LoopResult {
     }
 }
 
-/// Remote launcher: loops on the message queue, spawning `codex --print`
-/// for each message and forwarding stdout lines as assistant messages.
 async fn codex_remote_launcher(
-    working_directory: &str,
-    queue: &MessageQueue2<CodexMode>,
-    ws_client: &crate::ws::session_client::WsSessionClient,
-    active_pid: &AtomicU32,
-    session: &AgentSessionBase<CodexMode>,
+    session: &Arc<AgentSessionBase<CodexMode>>,
+    backend: &Arc<CodexAppServerBackend>,
 ) -> LoopResult {
+    let working_directory = session.path.clone();
     debug!("[codexRemoteLauncher] Starting in {}", working_directory);
 
+    if let Err(e) = backend.initialize().await {
+        warn!("[codexRemoteLauncher] Failed to initialize Codex App Server: {}", e);
+        session
+            .ws_client
+            .send_message(serde_json::json!({
+                "type": "error",
+                "message": format!("Failed to initialize codex app-server: {}", e),
+            }))
+            .await;
+        return LoopResult::Exit;
+    }
+
+    let thread_id = match backend
+        .new_session(AgentSessionConfig {
+            cwd: working_directory.clone(),
+            mcp_servers: vec![],
+        })
+        .await
+    {
+        Ok(tid) => {
+            session.on_session_found(&tid).await;
+            tid
+        }
+        Err(e) => {
+            warn!("[codexRemoteLauncher] Failed to start thread: {}", e);
+            session
+                .ws_client
+                .send_message(serde_json::json!({
+                    "type": "error",
+                    "message": format!("Failed to start codex thread: {}", e),
+                }))
+                .await;
+            return LoopResult::Exit;
+        }
+    };
+
     loop {
-        let batch = match queue.wait_for_messages().await {
+        let batch = match session.queue.wait_for_messages().await {
             Some(batch) => batch,
             None => {
                 debug!("[codexRemoteLauncher] Queue closed, exiting");
@@ -313,84 +423,42 @@ async fn codex_remote_launcher(
         };
 
         let prompt = batch.message;
+
         debug!(
             "[codexRemoteLauncher] Processing message: {}",
             if prompt.len() > 100 {
-                format!("{}...", &prompt[..100])
+                format!("{}...", &prompt[..prompt.floor_char_boundary(100)])
             } else {
                 prompt.clone()
             }
         );
 
-        // Spawn `codex --print` with the message piped to stdin
-        let mut cmd = tokio::process::Command::new("codex");
-        cmd.arg("--print")
-            .current_dir(working_directory)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-
-        let mut child = match cmd.spawn() {
-            Ok(child) => child,
-            Err(e) => {
-                warn!("[codexRemoteLauncher] Failed to spawn codex: {}", e);
-                ws_client
-                    .send_message(serde_json::json!({
-                        "type": "error",
-                        "message": format!("Failed to spawn codex: {}", e),
-                    }))
-                    .await;
-                continue;
-            }
-        };
-
-        active_pid.store(child.id().unwrap_or(0), Ordering::Relaxed);
         session.on_thinking_change(true).await;
 
-        // Write the prompt to stdin
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
-                warn!("[codexRemoteLauncher] Failed to write to stdin: {}", e);
-            }
-            drop(stdin);
+        let ws_for_update = session.ws_client.clone();
+        let on_update: Box<dyn Fn(AgentMessage) + Send + Sync> =
+            Box::new(move |msg| {
+                let ws = ws_for_update.clone();
+                tokio::spawn(async move {
+                    forward_agent_message(&ws, msg).await;
+                });
+            });
+
+        let content = vec![PromptContent::Text { text: prompt }];
+        if let Err(e) = backend.prompt(&thread_id, content, on_update).await {
+            warn!("[codexRemoteLauncher] Prompt error: {}", e);
+            session
+                .ws_client
+                .send_message(serde_json::json!({
+                    "type": "error",
+                    "message": format!("Codex error: {}", e),
+                }))
+                .await;
         }
 
-        // Read stdout lines and forward as assistant messages
-        if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if line.is_empty() {
-                    continue;
-                }
-                ws_client
-                    .send_message(serde_json::json!({
-                        "type": "assistant",
-                        "message": {
-                            "role": "assistant",
-                            "content": line,
-                        },
-                    }))
-                    .await;
-            }
-        }
-
-        // Wait for the process to finish
-        match child.wait().await {
-            Ok(status) => {
-                debug!("[codexRemoteLauncher] Codex process exited: {:?}", status);
-            }
-            Err(e) => {
-                warn!("[codexRemoteLauncher] Error waiting for codex: {}", e);
-            }
-        }
-
-        active_pid.store(0, Ordering::Relaxed);
         session.on_thinking_change(false).await;
 
-        // Check if queue is closed
-        if queue.is_closed().await {
+        if session.queue.is_closed().await {
             return LoopResult::Exit;
         }
     }

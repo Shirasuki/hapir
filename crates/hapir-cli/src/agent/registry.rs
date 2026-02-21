@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::agent::types::{AgentBackend, AgentBackendFactory};
+use hapir_acp::types::{AgentBackend, AgentBackendFactory};
 
 /// Global registry of agent backend factories.
 pub struct AgentRegistry {

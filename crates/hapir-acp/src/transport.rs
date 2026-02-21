@@ -10,13 +10,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::debug;
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 /// Classification of errors observed on the child process's stderr.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AcpStderrErrorType {
+pub enum StderrErrorType {
     RateLimit,
     ModelNotFound,
     Authentication,
@@ -26,8 +22,8 @@ pub enum AcpStderrErrorType {
 
 /// A structured error parsed from stderr output.
 #[derive(Debug, Clone)]
-pub struct AcpStderrError {
-    pub error_type: AcpStderrErrorType,
+pub struct StderrError {
+    pub error_type: StderrErrorType,
     pub message: String,
     pub raw: String,
 }
@@ -36,7 +32,7 @@ pub struct AcpStderrError {
 pub type NotificationHandler = Box<dyn Fn(String, Value) + Send + Sync>;
 
 /// Handler for stderr error messages from the child process.
-pub type StderrErrorHandler = Box<dyn Fn(AcpStderrError) + Send + Sync>;
+pub type StderrErrorHandler = Box<dyn Fn(StderrError) + Send + Sync>;
 
 /// Handler for incoming JSON-RPC requests from the child process.
 /// Receives `(params, request_id)` and returns the result value.
@@ -47,24 +43,14 @@ pub type RequestHandler = Arc<
 /// Default request timeout (120 seconds).
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 
-// ---------------------------------------------------------------------------
-// Internal message types
-// ---------------------------------------------------------------------------
-
-/// A pending request waiting for a JSON-RPC response.
 struct PendingRequest {
     resolve: oneshot::Sender<Result<Value, String>>,
 }
 
-/// Commands sent to the writer task.
 enum WriteCmd {
     Send(String),
     Close,
 }
-
-// ---------------------------------------------------------------------------
-// AcpStdioTransport
-// ---------------------------------------------------------------------------
 
 /// JSON-RPC 2.0 transport over stdin/stdout of a child process.
 ///
@@ -80,7 +66,6 @@ pub struct AcpStdioTransport {
     write_tx: Mutex<Option<mpsc::UnboundedSender<WriteCmd>>>,
     child: Mutex<Option<Child>>,
     protocol_error: Arc<Mutex<Option<String>>>,
-    /// Handles for the background reader/writer/stderr tasks.
     _tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -97,7 +82,7 @@ impl AcpStdioTransport {
             cmd.envs(env_map);
         }
 
-        let mut child = cmd.spawn().expect("failed to spawn ACP child process");
+        let mut child = cmd.spawn().expect("failed to spawn child process");
 
         let child_stdout = child.stdout.take().expect("child stdout");
         let child_stdin = child.stdin.take().expect("child stdin");
@@ -117,7 +102,6 @@ impl AcpStdioTransport {
             _tasks: Mutex::new(Vec::new()),
         });
 
-        // Writer task
         let writer_handle = {
             let mut stdin = child_stdin;
             let mut rx = write_rx;
@@ -137,7 +121,6 @@ impl AcpStdioTransport {
             })
         };
 
-        // Stdout reader task
         let reader_handle = {
             let t = transport.clone();
             tokio::spawn(async move {
@@ -152,7 +135,6 @@ impl AcpStdioTransport {
             })
         };
 
-        // Stderr reader task
         let stderr_handle = {
             let t = transport.clone();
             tokio::spawn(async move {
@@ -161,14 +143,13 @@ impl AcpStdioTransport {
                 while let Ok(Some(line)) = lines.next_line().await {
                     let text = line.trim().to_string();
                     if !text.is_empty() {
-                        debug!("[ACP][stderr] {}", text);
+                        debug!("[transport][stderr] {}", text);
                         t.parse_stderr_error(&text).await;
                     }
                 }
             })
         };
 
-        // Store tasks
         let t2 = transport.clone();
         tokio::spawn(async move {
             let mut tasks = t2._tasks.lock().await;
@@ -180,9 +161,6 @@ impl AcpStdioTransport {
         transport
     }
 
-    // -- Public API --
-
-    /// Set the notification handler.
     pub async fn on_notification<F>(&self, handler: F)
     where
         F: Fn(String, Value) + Send + Sync + 'static,
@@ -190,15 +168,13 @@ impl AcpStdioTransport {
         *self.notification_handler.lock().await = Some(Box::new(handler));
     }
 
-    /// Set the stderr error handler.
     pub async fn on_stderr_error<F>(&self, handler: F)
     where
-        F: Fn(AcpStderrError) + Send + Sync + 'static,
+        F: Fn(StderrError) + Send + Sync + 'static,
     {
         *self.stderr_error_handler.lock().await = Some(Box::new(handler));
     }
 
-    /// Register a handler for incoming JSON-RPC requests from the child.
     pub async fn register_request_handler(&self, method: &str, handler: RequestHandler) {
         self.request_handlers
             .lock()
@@ -206,15 +182,12 @@ impl AcpStdioTransport {
             .insert(method.to_string(), handler);
     }
 
-    /// Send a JSON-RPC request and wait for the response.
-    /// `timeout_ms == u64::MAX` means no timeout (infinite wait).
     pub async fn send_request(
         &self,
         method: &str,
         params: Value,
         timeout_ms: u64,
     ) -> Result<Value, String> {
-        // Check for protocol error
         if let Some(err) = self.protocol_error.lock().await.as_ref() {
             return Err(err.clone());
         }
@@ -235,7 +208,6 @@ impl AcpStdioTransport {
 
         self.write_payload(&payload).await;
 
-        // u64::MAX signals "no timeout" (Infinity equivalent)
         if timeout_ms == u64::MAX {
             return rx.await.unwrap_or(Err("channel closed".to_string()));
         }
@@ -257,14 +229,13 @@ impl AcpStdioTransport {
             Err(_) => {
                 self.pending.lock().await.remove(&id);
                 Err(format!(
-                    "ACP request '{}' timed out after {}ms",
+                    "Request '{}' timed out after {}ms",
                     method, effective_timeout
                 ))
             }
         }
     }
 
-    /// Send a JSON-RPC request with the default timeout.
     pub async fn send_request_default(
         &self,
         method: &str,
@@ -273,7 +244,6 @@ impl AcpStdioTransport {
         self.send_request(method, params, DEFAULT_TIMEOUT_MS).await
     }
 
-    /// Send a JSON-RPC notification (no response expected).
     pub async fn send_notification(&self, method: &str, params: Value) {
         let payload = serde_json::json!({
             "jsonrpc": "2.0",
@@ -283,22 +253,15 @@ impl AcpStdioTransport {
         self.write_payload(&payload).await;
     }
 
-    /// Close the transport: close stdin, kill the child, reject all pending.
     pub async fn close(&self) {
-        // Signal writer to close stdin
         if let Some(tx) = self.write_tx.lock().await.take() {
             let _ = tx.send(WriteCmd::Close);
         }
-
-        // Kill child process
         if let Some(mut child) = self.child.lock().await.take() {
             let _ = child.kill().await;
         }
-
-        self.reject_all_pending("ACP transport closed").await;
+        self.reject_all_pending("transport closed").await;
     }
-
-    // -- Internal --
 
     async fn write_payload(&self, payload: &Value) {
         let serialized = format!("{}\n", serde_json::to_string(payload).unwrap_or_default());
@@ -315,11 +278,10 @@ impl AcpStdioTransport {
         let parsed: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => {
-                let err_msg = "Failed to parse JSON-RPC from ACP agent".to_string();
+                let err_msg = "Failed to parse JSON-RPC from agent".to_string();
                 *self.protocol_error.lock().await = Some(err_msg.clone());
-                debug!("[ACP] Failed to parse JSON-RPC line: {}", line);
+                debug!("[transport] Failed to parse JSON-RPC line: {}", line);
                 self.reject_all_pending(&err_msg).await;
-                // Close stdin and kill
                 if let Some(tx) = self.write_tx.lock().await.take() {
                     let _ = tx.send(WriteCmd::Close);
                 }
@@ -330,13 +292,11 @@ impl AcpStdioTransport {
             }
         };
 
-        // Must be an object
         if !parsed.is_object() {
-            debug!("[ACP] Ignoring non-object JSON from stdout");
+            debug!("[transport] Ignoring non-object JSON from stdout");
             return;
         }
 
-        // Incoming request (has method + id)
         if parsed.get("method").is_some()
             && let Some(id) = parsed.get("id")
             && !id.is_null()
@@ -345,7 +305,6 @@ impl AcpStdioTransport {
             return;
         }
         if parsed.get("method").is_some() {
-            // Notification (method but no id)
             let method = parsed["method"].as_str().unwrap_or("").to_string();
             let params = parsed.get("params").cloned().unwrap_or(Value::Null);
             let handler = self.notification_handler.lock().await;
@@ -355,7 +314,6 @@ impl AcpStdioTransport {
             return;
         }
 
-        // Response (has id, no method)
         if parsed.get("id").is_some() {
             self.handle_response(&parsed).await;
         }
@@ -399,7 +357,7 @@ impl AcpStdioTransport {
         let id = match response.get("id").and_then(|v| v.as_u64()) {
             Some(id) => id,
             None => {
-                debug!("[ACP] Received response without numeric id");
+                debug!("[transport] Received response without numeric id");
                 return;
             }
         };
@@ -420,7 +378,7 @@ impl AcpStdioTransport {
                 }
             }
             None => {
-                debug!("[ACP] Received response with no pending request: {}", id);
+                debug!("[transport] Received response with no pending request: {}", id);
             }
         }
     }
@@ -445,8 +403,8 @@ impl AcpStdioTransport {
             || lower.contains("ratelimitexceeded")
             || lower.contains("rate limit")
         {
-            handler(AcpStderrError {
-                error_type: AcpStderrErrorType::RateLimit,
+            handler(StderrError {
+                error_type: StderrErrorType::RateLimit,
                 message: "Rate limit exceeded. Please wait before sending more requests."
                     .to_string(),
                 raw: text.to_string(),
@@ -458,11 +416,9 @@ impl AcpStdioTransport {
             || lower.contains("model not found")
             || lower.contains("not_found")
         {
-            handler(AcpStderrError {
-                error_type: AcpStderrErrorType::ModelNotFound,
-                message:
-                    "Model not found. Available models: gemini-2.5-pro, gemini-2.5-flash, gemini-2.0-flash"
-                        .to_string(),
+            handler(StderrError {
+                error_type: StderrErrorType::ModelNotFound,
+                message: "Model not found.".to_string(),
                 raw: text.to_string(),
             });
             return;
@@ -474,11 +430,9 @@ impl AcpStdioTransport {
             || lower.contains("permission denied")
             || lower.contains("authentication")
         {
-            handler(AcpStderrError {
-                error_type: AcpStderrErrorType::Authentication,
-                message:
-                    "Authentication failed. Please check your credentials or run \"gemini auth login\"."
-                        .to_string(),
+            handler(StderrError {
+                error_type: StderrErrorType::Authentication,
+                message: "Authentication failed. Please check your credentials.".to_string(),
                 raw: text.to_string(),
             });
             return;
@@ -488,8 +442,8 @@ impl AcpStdioTransport {
             || lower.contains("resource exhausted")
             || lower.contains("resourceexhausted")
         {
-            handler(AcpStderrError {
-                error_type: AcpStderrErrorType::QuotaExceeded,
+            handler(StderrError {
+                error_type: StderrErrorType::QuotaExceeded,
                 message: "API quota exceeded. Please check your billing or wait for quota reset."
                     .to_string(),
                 raw: text.to_string(),
@@ -498,8 +452,8 @@ impl AcpStdioTransport {
         }
 
         if lower.contains("error") || lower.contains("failed") || lower.contains("exception") {
-            handler(AcpStderrError {
-                error_type: AcpStderrErrorType::Unknown,
+            handler(StderrError {
+                error_type: StderrErrorType::Unknown,
                 message: text.to_string(),
                 raw: text.to_string(),
             });
