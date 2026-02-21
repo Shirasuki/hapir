@@ -111,6 +111,8 @@ pub enum AgentMessage {
     },
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "thinking_status")]
+    ThinkingStatus { status: Option<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

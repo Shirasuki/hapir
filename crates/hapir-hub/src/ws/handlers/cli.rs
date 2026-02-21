@@ -458,6 +458,10 @@ async fn handle_session_alive(
     }
 
     let thinking = data.get("thinking").and_then(|v| v.as_bool());
+    let thinking_status = data
+        .get("thinkingStatus")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let _mode = data.get("mode").and_then(|v| v.as_str()); // accepted for protocol compat
     let permission_mode = data
         .get("permissionMode")
@@ -467,7 +471,7 @@ async fn handle_session_alive(
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
     sync_engine
-        .handle_session_alive(&sid, time, thinking, permission_mode, model_mode)
+        .handle_session_alive(&sid, time, thinking, thinking_status, permission_mode, model_mode)
         .await;
 }
 

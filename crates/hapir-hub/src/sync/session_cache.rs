@@ -189,6 +189,7 @@ impl SessionCache {
             agent_state_version: stored.agent_state_version as f64,
             thinking: existing.map(|e| e.thinking).unwrap_or(false),
             thinking_at: existing.map(|e| e.thinking_at).unwrap_or(0.0),
+            thinking_status: existing.and_then(|e| e.thinking_status.clone()),
             todos,
             permission_mode: existing.and_then(|e| e.permission_mode),
             model_mode: existing.and_then(|e| e.model_mode),
@@ -230,6 +231,7 @@ impl SessionCache {
         sid: &str,
         time: i64,
         thinking: Option<bool>,
+        thinking_status: Option<String>,
         permission_mode: Option<PermissionMode>,
         model_mode: Option<ModelMode>,
         store: &Store,
@@ -250,6 +252,7 @@ impl SessionCache {
 
         let was_active = session.active;
         let was_thinking = session.thinking;
+        let prev_thinking_status = session.thinking_status.clone();
         let prev_perm = session.permission_mode;
         let prev_model = session.model_mode;
 
@@ -257,6 +260,7 @@ impl SessionCache {
         session.active_at = session.active_at.max(t as f64);
         session.thinking = thinking.unwrap_or(false);
         session.thinking_at = t as f64;
+        session.thinking_status = thinking_status;
         if let Some(pm) = permission_mode {
             session.permission_mode = Some(pm);
         }
@@ -267,8 +271,10 @@ impl SessionCache {
         let now = now_millis();
         let last = self.last_broadcast_at.get(sid).copied().unwrap_or(0);
         let mode_changed = prev_perm != session.permission_mode || prev_model != session.model_mode;
+        let thinking_status_changed = prev_thinking_status != session.thinking_status;
         let should_broadcast = (!was_active && session.active)
             || (was_thinking != session.thinking)
+            || thinking_status_changed
             || mode_changed
             || (now - last > 10_000);
 
@@ -277,6 +283,7 @@ impl SessionCache {
             let data = serde_json::json!({
                 "activeAt": session.active_at,
                 "thinking": session.thinking,
+                "thinkingStatus": session.thinking_status,
                 "permissionMode": session.permission_mode,
                 "modelMode": session.model_mode,
             });
@@ -311,6 +318,7 @@ impl SessionCache {
 
         session.active = false;
         session.thinking = false;
+        session.thinking_status = None;
         session.thinking_at = t as f64;
 
         publisher.emit(SyncEvent::SessionUpdated {
@@ -337,6 +345,7 @@ impl SessionCache {
                 tracing::debug!(session_id = %id, "session expired due to inactivity");
                 session.active = false;
                 session.thinking = false;
+                session.thinking_status = None;
                 publisher.emit(SyncEvent::SessionUpdated {
                     session_id: id,
                     namespace: Some(session.namespace.clone()),

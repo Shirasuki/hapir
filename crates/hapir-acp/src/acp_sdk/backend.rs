@@ -13,7 +13,7 @@ use crate::types::{
 };
 
 use super::message_handler::AcpMessageHandler;
-use crate::transport::{AcpStdioTransport, StderrErrorHandler};
+use crate::transport::AcpStdioTransport;
 
 async fn with_retry<F, Fut>(max_attempts: u32, f: F) -> Result<Value, String>
 where
@@ -53,7 +53,7 @@ pub struct AcpSdkBackend {
     transport: Mutex<Option<Arc<AcpStdioTransport>>>,
     permission_handler: Mutex<Option<OnPermissionRequestFn>>,
     #[allow(dead_code)]
-    stderr_error_handler: Mutex<Option<StderrErrorHandler>>,
+    stderr_handler: Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>,
     pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
     active_session_id: Mutex<Option<String>>,
     message_handler: Arc<Mutex<Option<AcpMessageHandler>>>,
@@ -69,7 +69,7 @@ impl AcpSdkBackend {
             env,
             transport: Mutex::new(None),
             permission_handler: Mutex::new(None),
-            stderr_error_handler: Mutex::new(None),
+            stderr_handler: Mutex::new(None),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
             active_session_id: Mutex::new(None),
             message_handler: Arc::new(Mutex::new(None)),
@@ -231,7 +231,8 @@ impl AgentBackend for AcpSdkBackend {
                 return Ok(());
             }
 
-            let transport = AcpStdioTransport::new(&self.command, &self.args, self.env.clone());
+            let transport = AcpStdioTransport::new(&self.command, &self.args, self.env.clone())
+                .map_err(|e| anyhow::anyhow!(e))?;
 
             let msg_for_notif = self.message_handler.clone();
 

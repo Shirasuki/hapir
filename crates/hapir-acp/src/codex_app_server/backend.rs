@@ -3,15 +3,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde_json::Value;
-use tokio::sync::{Mutex, oneshot};
-use tracing::debug;
-
+use crate::codex_app_server::sender_ex::ArcMutexSender;
 use crate::transport::AcpStdioTransport;
 use crate::types::{
     AgentBackend, AgentSessionConfig, OnPermissionRequestFn, OnUpdateFn, PermissionRequest,
     PermissionResponse, PromptContent,
 };
+use serde_json::Value;
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::debug;
 
 use super::message_handler::CodexMessageHandler;
 
@@ -36,7 +36,7 @@ pub struct CodexAppServerBackend {
     permission_handler: Mutex<Option<OnPermissionRequestFn>>,
     pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
     active_thread_id: Mutex<Option<String>>,
-    message_handler: Arc<Mutex<Option<CodexMessageHandler>>>,
+    notification_tx: ArcMutexSender<(String, Value)>,
 }
 
 impl CodexAppServerBackend {
@@ -49,7 +49,7 @@ impl CodexAppServerBackend {
             permission_handler: Mutex::new(None),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
             active_thread_id: Mutex::new(None),
-            message_handler: Arc::new(Mutex::new(None)),
+            notification_tx: ArcMutexSender::new(),
         }
     }
 }
@@ -61,16 +61,13 @@ impl AgentBackend for CodexAppServerBackend {
                 return Ok(());
             }
 
-            let transport = AcpStdioTransport::new(&self.command, &self.args, self.env.clone());
+            let transport = AcpStdioTransport::new(&self.command, &self.args, self.env.clone())
+                .map_err(|e| anyhow::anyhow!(e))?;
 
-            let msg_handler = self.message_handler.clone();
+            let notif_tx = self.notification_tx.clone();
             transport
                 .on_notification(move |method, params| {
-                    if let Ok(mut handler) = msg_handler.try_lock()
-                        && let Some(h) = handler.as_mut()
-                    {
-                        h.handle_notification(&method, &params);
-                    }
+                    notif_tx.send((method, params));
                 })
                 .await;
 
@@ -85,15 +82,14 @@ impl AgentBackend for CodexAppServerBackend {
                         Box::pin(async move {
                             let id = params
                                 .as_object()
-                                .and_then(|o| o.get("id"))
+                                .and_then(|o| o.get("itemId").or_else(|| o.get("id")))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("tool-unknown")
                                 .to_string();
 
                             let (tx, rx) = oneshot::channel();
                             pending.lock().await.insert(id, PendingPermission { tx });
-                            rx.await
-                                .unwrap_or_else(|_| serde_json::json!({"approved": false}))
+                            rx.await.unwrap_or_else(|_| serde_json::json!("decline"))
                         })
                     }),
                 )
@@ -108,21 +104,19 @@ impl AgentBackend for CodexAppServerBackend {
                         Box::pin(async move {
                             let id = params
                                 .as_object()
-                                .and_then(|o| o.get("id"))
+                                .and_then(|o| o.get("itemId").or_else(|| o.get("id")))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("tool-unknown")
                                 .to_string();
 
                             let (tx, rx) = oneshot::channel();
                             pending.lock().await.insert(id, PendingPermission { tx });
-                            rx.await
-                                .unwrap_or_else(|_| serde_json::json!({"approved": false}))
+                            rx.await.unwrap_or_else(|_| serde_json::json!("decline"))
                         })
                     }),
                 )
                 .await;
 
-            // Codex two-step handshake: send `initialize` request, then `initialized` notification
             let response = transport
                 .send_request_default(
                     "initialize",
@@ -171,11 +165,17 @@ impl AgentBackend for CodexAppServerBackend {
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
 
+            debug!("[CodexAppServer] thread/start response: {:?}", response);
+
             let thread_id = response
                 .as_object()
-                .and_then(|o| o.get("threadId").or_else(|| o.get("id")))
+                .and_then(|o| {
+                    o.get("threadId")
+                        .or_else(|| o.get("id"))
+                        .or_else(|| o.get("thread").and_then(|t| t.get("id")))
+                })
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Invalid thread/start response"))?
+                .ok_or_else(|| anyhow::anyhow!("Invalid thread/start response: {response}"))?
                 .to_string();
 
             *self.active_thread_id.lock().await = Some(thread_id.clone());
@@ -200,32 +200,63 @@ impl AgentBackend for CodexAppServerBackend {
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("Codex transport not initialized"))?;
 
-            *self.message_handler.lock().await = Some(CodexMessageHandler::new(move |msg| {
-                on_update(msg);
-            }));
+            // Create per-prompt channels
+            let (ntx, mut nrx) = mpsc::unbounded_channel::<(String, Value)>();
+            self.notification_tx.set(Some(ntx));
 
-            let prompt_text = content
+            let input: Vec<Value> = content
                 .iter()
                 .map(|c| match c {
-                    PromptContent::Text { text } => text.as_str(),
+                    PromptContent::Text { text } => serde_json::json!({
+                        "type": "text",
+                        "text": text,
+                    }),
                 })
-                .collect::<Vec<_>>()
-                .join("\n");
+                .collect();
 
-            let result = transport
-                .send_request(
+            // Spawn notification processor: owns the message handler,
+            // processes all notifications, breaks on turn/completed.
+            let process_handle = tokio::spawn(async move {
+                let mut handler = CodexMessageHandler::new(move |msg| {
+                    on_update(msg);
+                });
+                loop {
+                    match nrx.recv().await {
+                        Some((method, params)) => {
+                            if handler.handle_notification(&method, &params) {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+            });
+
+            // Send turn/start and wait for the RPC ack (comes back immediately
+            // with status "inProgress"). Use default timeout for the ack only.
+            let rpc_result = transport
+                .send_request_default(
                     "turn/start",
                     serde_json::json!({
                         "threadId": session_id,
-                        "content": prompt_text,
+                        "input": input,
                     }),
-                    u64::MAX,
                 )
                 .await;
 
-            *self.message_handler.lock().await = None;
+            if let Err(e) = rpc_result {
+                process_handle.abort();
+                self.notification_tx.set(None);
+                return Err(anyhow::anyhow!(e));
+            }
 
-            result.map(|_| ()).map_err(|e| anyhow::anyhow!(e))
+            // Turn accepted, wait for turn/completed via notification processor
+            let _ = process_handle.await;
+
+            // Close channels
+            self.notification_tx.set(None);
+
+            Ok(())
         })
     }
 
@@ -236,8 +267,8 @@ impl AgentBackend for CodexAppServerBackend {
         let session_id = session_id.to_string();
         Box::pin(async move {
             if let Some(transport) = self.transport.lock().await.as_ref() {
-                transport
-                    .send_notification(
+                let _ = transport
+                    .send_request_default(
                         "turn/interrupt",
                         serde_json::json!({"threadId": session_id}),
                     )
@@ -257,8 +288,19 @@ impl AgentBackend for CodexAppServerBackend {
         Box::pin(async move {
             let pending = self.pending_permissions.lock().await.remove(&request_id);
             if let Some(p) = pending {
-                let approved = matches!(response, PermissionResponse::Selected { ref option_id } if option_id != "deny");
-                let _ = p.tx.send(serde_json::json!({"approved": approved}));
+                let result = match response {
+                    PermissionResponse::Selected { ref option_id } if option_id == "deny" => {
+                        serde_json::json!("decline")
+                    }
+                    PermissionResponse::Selected { ref option_id }
+                        if option_id == "accept_session" =>
+                    {
+                        serde_json::json!("acceptForSession")
+                    }
+                    PermissionResponse::Selected { .. } => serde_json::json!("accept"),
+                    _ => serde_json::json!("decline"),
+                };
+                let _ = p.tx.send(result);
             } else {
                 debug!(
                     "[CodexAppServer] No pending permission for id {}",

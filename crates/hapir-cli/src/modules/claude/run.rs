@@ -20,10 +20,8 @@ use crate::agent::session_factory::{SessionBootstrapOptions, bootstrap_session};
 use crate::modules::claude::hook_server::start_hook_server;
 use crate::modules::claude::session::{ClaudeSession, StartedBy};
 use hapir_infra::config::Configuration;
-use hapir_infra::handlers;
 use hapir_infra::handlers::uploads;
 use hapir_infra::utils::message_queue::MessageQueue2;
-use hapir_infra::ws::session_client::WsSessionClient;
 
 /// Options for starting a Claude session.
 #[derive(Debug, Clone, Default)]
@@ -250,8 +248,6 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
         pending_permissions: Arc::new(Mutex::new(HashMap::new())),
         active_pid: Arc::new(AtomicU32::new(0)),
     });
-
-    register_common_rpc_handlers(&ws_client, &working_directory).await;
 
     // Register onUserMessage RPC handler
     let queue_for_rpc = queue.clone();
@@ -553,7 +549,3 @@ fn write_hook_settings(session_id: &str, hook_port: u16, hook_token: &str) -> St
     hook_settings_path
 }
 
-/// Register common RPC handlers (bash, files, directories, git, ripgrep) on the WebSocket client.
-async fn register_common_rpc_handlers(ws_client: &Arc<WsSessionClient>, working_directory: &str) {
-    handlers::register_all_handlers(ws_client.as_ref(), working_directory).await;
-}

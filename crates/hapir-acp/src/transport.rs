@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -8,31 +9,15 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tracing::debug;
-
-/// Classification of errors observed on the child process's stderr.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StderrErrorType {
-    RateLimit,
-    ModelNotFound,
-    Authentication,
-    QuotaExceeded,
-    Unknown,
-}
-
-/// A structured error parsed from stderr output.
-#[derive(Debug, Clone)]
-pub struct StderrError {
-    pub error_type: StderrErrorType,
-    pub message: String,
-    pub raw: String,
-}
 
 /// Handler for notification messages from the child process.
 pub type NotificationHandler = Box<dyn Fn(String, Value) + Send + Sync>;
 
-/// Handler for stderr error messages from the child process.
-pub type StderrErrorHandler = Box<dyn Fn(StderrError) + Send + Sync>;
+/// Handler for stderr output lines from the child process.
+/// Receives the raw text line; interpretation is up to the backend.
+pub type StderrHandler = Box<dyn Fn(String) + Send + Sync>;
 
 /// Handler for incoming JSON-RPC requests from the child process.
 /// Receives `(params, request_id)` and returns the result value.
@@ -61,27 +46,28 @@ pub struct AcpStdioTransport {
     pending: Arc<Mutex<HashMap<u64, PendingRequest>>>,
     request_handlers: Arc<Mutex<HashMap<String, RequestHandler>>>,
     notification_handler: Arc<Mutex<Option<NotificationHandler>>>,
-    stderr_error_handler: Arc<Mutex<Option<StderrErrorHandler>>>,
+    stderr_handler: Arc<Mutex<Option<StderrHandler>>>,
     write_tx: Mutex<Option<mpsc::UnboundedSender<WriteCmd>>>,
     child: Mutex<Option<Child>>,
     protocol_error: Arc<Mutex<Option<String>>>,
-    _tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    _tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl AcpStdioTransport {
     /// Spawn a child process and wire up the JSON-RPC transport.
-    pub fn new(command: &str, args: &[String], env: Option<HashMap<String, String>>) -> Arc<Self> {
+    pub fn new(command: &str, args: &[String], env: Option<HashMap<String, String>>) -> Result<Arc<Self>, String> {
         let mut cmd = Command::new(command);
         cmd.args(args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
+        cmd.env("NO_COLOR", "1");
         if let Some(env_map) = env {
             cmd.envs(env_map);
         }
 
-        let mut child = cmd.spawn().expect("failed to spawn child process");
+        let mut child = cmd.spawn().map_err(|e| format!("failed to spawn '{}': {}", command, e))?;
 
         let child_stdout = child.stdout.take().expect("child stdout");
         let child_stdin = child.stdin.take().expect("child stdin");
@@ -94,7 +80,7 @@ impl AcpStdioTransport {
             pending: Arc::new(Mutex::new(HashMap::new())),
             request_handlers: Arc::new(Mutex::new(HashMap::new())),
             notification_handler: Arc::new(Mutex::new(None)),
-            stderr_error_handler: Arc::new(Mutex::new(None)),
+            stderr_handler: Arc::new(Mutex::new(None)),
             write_tx: Mutex::new(Some(write_tx)),
             child: Mutex::new(Some(child)),
             protocol_error: Arc::new(Mutex::new(None)),
@@ -128,9 +114,12 @@ impl AcpStdioTransport {
                 while let Ok(Some(line)) = lines.next_line().await {
                     let trimmed = line.trim().to_string();
                     if !trimmed.is_empty() {
+                        debug!("[transport][stdout] {}", trimmed);
                         t.handle_line(&trimmed).await;
                     }
                 }
+                debug!("[transport] Reader ended, child process likely exited");
+                t.reject_all_pending("child process exited").await;
             })
         };
 
@@ -143,7 +132,10 @@ impl AcpStdioTransport {
                     let text = line.trim().to_string();
                     if !text.is_empty() {
                         debug!("[transport][stderr] {}", text);
-                        t.parse_stderr_error(&text).await;
+                        let handler = t.stderr_handler.lock().await;
+                        if let Some(h) = handler.as_ref() {
+                            h(text);
+                        }
                     }
                 }
             })
@@ -157,7 +149,7 @@ impl AcpStdioTransport {
             tasks.push(stderr_handle);
         });
 
-        transport
+        Ok(transport)
     }
 
     pub async fn on_notification<F>(&self, handler: F)
@@ -167,11 +159,11 @@ impl AcpStdioTransport {
         *self.notification_handler.lock().await = Some(Box::new(handler));
     }
 
-    pub async fn on_stderr_error<F>(&self, handler: F)
+    pub async fn on_stderr<F>(&self, handler: F)
     where
-        F: Fn(StderrError) + Send + Sync + 'static,
+        F: Fn(String) + Send + Sync + 'static,
     {
-        *self.stderr_error_handler.lock().await = Some(Box::new(handler));
+        *self.stderr_handler.lock().await = Some(Box::new(handler));
     }
 
     pub async fn register_request_handler(&self, method: &str, handler: RequestHandler) {
@@ -383,73 +375,4 @@ impl AcpStdioTransport {
         }
     }
 
-    async fn parse_stderr_error(&self, text: &str) {
-        let handler = self.stderr_error_handler.lock().await;
-        let handler = match handler.as_ref() {
-            Some(h) => h,
-            None => return,
-        };
-
-        let lower = text.to_lowercase();
-
-        if lower.contains("status 429")
-            || lower.contains("ratelimitexceeded")
-            || lower.contains("rate limit")
-        {
-            handler(StderrError {
-                error_type: StderrErrorType::RateLimit,
-                message: "Rate limit exceeded. Please wait before sending more requests."
-                    .to_string(),
-                raw: text.to_string(),
-            });
-            return;
-        }
-
-        if lower.contains("status 404")
-            || lower.contains("model not found")
-            || lower.contains("not_found")
-        {
-            handler(StderrError {
-                error_type: StderrErrorType::ModelNotFound,
-                message: "Model not found.".to_string(),
-                raw: text.to_string(),
-            });
-            return;
-        }
-
-        if lower.contains("status 401")
-            || lower.contains("status 403")
-            || lower.contains("unauthenticated")
-            || lower.contains("permission denied")
-            || lower.contains("authentication")
-        {
-            handler(StderrError {
-                error_type: StderrErrorType::Authentication,
-                message: "Authentication failed. Please check your credentials.".to_string(),
-                raw: text.to_string(),
-            });
-            return;
-        }
-
-        if lower.contains("quota")
-            || lower.contains("resource exhausted")
-            || lower.contains("resourceexhausted")
-        {
-            handler(StderrError {
-                error_type: StderrErrorType::QuotaExceeded,
-                message: "API quota exceeded. Please check your billing or wait for quota reset."
-                    .to_string(),
-                raw: text.to_string(),
-            });
-            return;
-        }
-
-        if lower.contains("error") || lower.contains("failed") || lower.contains("exception") {
-            handler(StderrError {
-                error_type: StderrErrorType::Unknown,
-                message: text.to_string(),
-                raw: text.to_string(),
-            });
-        }
-    }
 }

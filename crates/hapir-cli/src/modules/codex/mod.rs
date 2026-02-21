@@ -96,12 +96,12 @@ async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
         }
         AgentMessage::Error { message } => {
             ws.send_message(serde_json::json!({
-                "type": "error",
-                "message": message,
+                "type": "assistant",
+                "message": { "role": "assistant", "content": message },
             }))
             .await;
         }
-        AgentMessage::TurnComplete { .. } => {}
+        AgentMessage::TurnComplete { .. } | AgentMessage::ThinkingStatus { .. } => {}
     }
 }
 
@@ -439,9 +439,15 @@ async fn codex_remote_launcher(
         session.on_thinking_change(true).await;
 
         let ws_for_update = session.ws_client.clone();
+        let thinking_status = session.thinking_status.clone();
         let on_update: Box<dyn Fn(AgentMessage) + Send + Sync> = Box::new(move |msg| {
             let ws = ws_for_update.clone();
+            let ts = thinking_status.clone();
             tokio::spawn(async move {
+                if let AgentMessage::ThinkingStatus { ref status } = msg {
+                    *ts.lock().await = status.clone();
+                    return;
+                }
                 forward_agent_message(&ws, msg).await;
             });
         });

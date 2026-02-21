@@ -43,6 +43,7 @@ export function HappyComposer(props: {
     active?: boolean
     allowSendWhenInactive?: boolean
     thinking?: boolean
+    thinkingStatus?: string | null
     agentState?: AgentState | null
     contextSize?: number
     controlledByUser?: boolean
@@ -67,6 +68,7 @@ export function HappyComposer(props: {
         active = true,
         allowSendWhenInactive = false,
         thinking = false,
+        thinkingStatus,
         agentState,
         contextSize,
         controlledByUser = false,
@@ -522,6 +524,7 @@ export function HappyComposer(props: {
                     <StatusBar
                         active={active}
                         thinking={thinking}
+                        thinkingStatus={thinkingStatus}
                         agentState={agentState}
                         contextSize={contextSize}
                         modelMode={modelMode}

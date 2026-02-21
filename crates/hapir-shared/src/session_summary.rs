@@ -121,6 +121,7 @@ mod tests {
             agent_state_version: 0.0,
             thinking: false,
             thinking_at: 0.0,
+            thinking_status: None,
             todos: Some(vec![
                 TodoItem {
                     content: "task1".into(),

@@ -60,6 +60,6 @@ pub fn convert_agent_message(message: &AgentMessage) -> Option<CodexMessage> {
         AgentMessage::Error { message } => Some(CodexMessage::Error {
             message: message.clone(),
         }),
-        AgentMessage::TurnComplete { .. } => None,
+        AgentMessage::TurnComplete { .. } | AgentMessage::ThinkingStatus { .. } => None,
     }
 }

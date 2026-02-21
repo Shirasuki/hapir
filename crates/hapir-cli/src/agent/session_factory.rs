@@ -140,6 +140,8 @@ pub async fn bootstrap_session(
         &session_info,
     ));
 
+    hapir_infra::handlers::register_all_handlers(ws_client.as_ref(), &working_directory).await;
+
     Ok(SessionBootstrapResult {
         api,
         ws_client,

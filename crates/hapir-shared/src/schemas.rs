@@ -271,6 +271,8 @@ pub struct Session {
     pub thinking: bool,
     pub thinking_at: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub todos: Option<Vec<TodoItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<PermissionMode>,
@@ -452,6 +454,7 @@ mod tests {
             agent_state_version: 0.0,
             thinking: false,
             thinking_at: 0.0,
+            thinking_status: None,
             todos: None,
             permission_mode: Some(PermissionMode::Default),
             model_mode: Some(ModelMode::Sonnet),

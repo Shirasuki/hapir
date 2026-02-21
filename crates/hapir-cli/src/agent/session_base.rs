@@ -63,6 +63,7 @@ pub struct AgentSessionBase<Mode: Clone + Send + 'static> {
     pub session_id: Arc<Mutex<Option<String>>>,
     pub mode: Arc<Mutex<SessionMode>>,
     pub thinking: Arc<Mutex<bool>>,
+    pub thinking_status: Arc<Mutex<Option<String>>>,
     pub api: Arc<ApiClient>,
     pub ws_client: Arc<WsSessionClient>,
     pub queue: Arc<MessageQueue2<Mode>>,
@@ -86,6 +87,7 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
             session_id: Arc::new(Mutex::new(opts.session_id)),
             mode: Arc::new(Mutex::new(opts.mode)),
             thinking: Arc::new(Mutex::new(false)),
+            thinking_status: Arc::new(Mutex::new(None)),
             api: opts.api,
             ws_client: opts.ws_client,
             queue: opts.queue,
@@ -119,9 +121,12 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
 
     async fn send_keep_alive(&self) {
         let thinking = *self.thinking.lock().await;
+        let thinking_status = self.thinking_status.lock().await.clone();
         let mode = self.mode.lock().await.as_str().to_string();
         let runtime = self.get_keep_alive_runtime().await;
-        self.ws_client.keep_alive(thinking, &mode, &runtime).await;
+        self.ws_client
+            .keep_alive(thinking, thinking_status.as_deref(), &mode, &runtime)
+            .await;
     }
 
     async fn get_keep_alive_runtime(&self) -> String {
@@ -146,6 +151,7 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
 
     /// Called when the thinking state changes.
     pub async fn on_thinking_change(&self, thinking: bool) {
+        debug!("[{}] thinking changed to {}", self.session_label, thinking);
         *self.thinking.lock().await = thinking;
         self.send_keep_alive().await;
     }
@@ -216,5 +222,10 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
 
     pub async fn get_model_mode(&self) -> Option<ModelMode> {
         *self.model_mode.lock().await
+    }
+
+    /// Set the thinking status text shown in the web UI status bar.
+    pub async fn set_thinking_status(&self, status: Option<String>) {
+        *self.thinking_status.lock().await = status;
     }
 }

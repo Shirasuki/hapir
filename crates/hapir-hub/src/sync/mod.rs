@@ -360,6 +360,7 @@ impl SyncEngine {
         sid: &str,
         time: i64,
         thinking: Option<bool>,
+        thinking_status: Option<String>,
         permission_mode: Option<PermissionMode>,
         model_mode: Option<ModelMode>,
     ) {
@@ -367,6 +368,7 @@ impl SyncEngine {
             sid,
             time,
             thinking,
+            thinking_status,
             permission_mode,
             model_mode,
             &self.store,

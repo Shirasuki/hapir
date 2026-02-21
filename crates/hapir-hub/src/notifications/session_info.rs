@@ -67,6 +67,7 @@ mod tests {
             agent_state_version: 0.0,
             thinking: false,
             thinking_at: 0.0,
+            thinking_status: None,
             todos: None,
             permission_mode: None,
             model_mode: None,

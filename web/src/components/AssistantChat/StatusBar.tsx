@@ -22,7 +22,7 @@ const VIBING_MESSAGES = [
     "Scheming", "Schlepping", "Shimmying", "Simmering", "Smooshing", "Spelunking",
     "Spinning", "Stewing", "Sussing", "Synthesizing", "Thinking", "Tinkering",
     "Transmuting", "Unfurling", "Unravelling", "Vibing", "Wandering", "Whirring",
-    "Wibbling", "Wizarding", "Working", "Wrangling"
+    "Wibbling", "Wizarding", "Working", "Wrangling", "Niqiuqing"
 ]
 
 const PERMISSION_TONE_CLASSES: Record<PermissionModeTone, string> = {
@@ -35,6 +35,7 @@ const PERMISSION_TONE_CLASSES: Record<PermissionModeTone, string> = {
 function getConnectionStatus(
     active: boolean,
     thinking: boolean,
+    thinkingStatus: string | null | undefined,
     agentState: AgentState | null | undefined,
     voiceStatus: ConversationStatus | undefined,
     t: (key: string) => string
@@ -70,9 +71,11 @@ function getConnectionStatus(
     }
 
     if (thinking) {
-        const vibingMessage = VIBING_MESSAGES[Math.floor(Math.random() * VIBING_MESSAGES.length)].toLowerCase() + '…'
+        const text = thinkingStatus
+            ? thinkingStatus
+            : VIBING_MESSAGES[Math.floor(Math.random() * VIBING_MESSAGES.length)].toLowerCase() + '…'
         return {
-            text: vibingMessage,
+            text,
             color: 'text-[#007AFF]',
             dotColor: 'bg-[#007AFF]',
             isPulsing: true
@@ -104,6 +107,7 @@ function getContextWarning(contextSize: number, maxContextSize: number, t: (key:
 export function StatusBar(props: {
     active: boolean
     thinking: boolean
+    thinkingStatus?: string | null
     agentState: AgentState | null | undefined
     contextSize?: number
     modelMode?: ModelMode
@@ -113,8 +117,8 @@ export function StatusBar(props: {
 }) {
     const { t } = useTranslation()
     const connectionStatus = useMemo(
-        () => getConnectionStatus(props.active, props.thinking, props.agentState, props.voiceStatus, t),
-        [props.active, props.thinking, props.agentState, props.voiceStatus, t]
+        () => getConnectionStatus(props.active, props.thinking, props.thinkingStatus, props.agentState, props.voiceStatus, t),
+        [props.active, props.thinking, props.thinkingStatus, props.agentState, props.voiceStatus, t]
     )
 
     const contextWarning = useMemo(

@@ -96,12 +96,12 @@ async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
         }
         AgentMessage::Error { message } => {
             ws.send_message(serde_json::json!({
-                "type": "error",
-                "message": message,
+                "type": "assistant",
+                "message": { "role": "assistant", "content": message },
             }))
             .await;
         }
-        AgentMessage::TurnComplete { .. } => {}
+        AgentMessage::TurnComplete { .. } | AgentMessage::ThinkingStatus { .. } => {}
     }
 }
 
