@@ -36,11 +36,12 @@ pub fn validate_path(target_path: &str, working_directory: &str) -> Result<PathB
         return Ok(resolved_target);
     }
 
-    // Target must be under working_directory + separator
-    let prefix = if working_str.ends_with('/') {
+    // Target must be under working_directory + separator.
+    // Use the platform's path separator for the prefix check.
+    let prefix = if working_str.ends_with(std::path::MAIN_SEPARATOR) {
         working_str.to_string()
     } else {
-        format!("{}/", working_str)
+        format!("{}{}", working_str, std::path::MAIN_SEPARATOR)
     };
 
     if target_str.starts_with(&prefix) {
@@ -57,41 +58,56 @@ pub fn validate_path(target_path: &str, working_directory: &str) -> Result<PathB
 mod tests {
     use super::*;
 
+    /// Return a platform-appropriate absolute working directory for tests.
+    fn test_working_dir() -> &'static str {
+        if cfg!(windows) {
+            r"C:\Users\user\project"
+        } else {
+            "/home/user/project"
+        }
+    }
+
     #[test]
     fn allows_path_within_working_dir() {
-        let result = validate_path("src/main.rs", "/home/user/project");
+        let wd = test_working_dir();
+        let result = validate_path("src/main.rs", wd);
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            PathBuf::from("/home/user/project/src/main.rs")
-        );
+        let expected = PathBuf::from(wd).join("src").join("main.rs");
+        assert_eq!(result.unwrap(), expected);
     }
 
     #[test]
     fn allows_working_dir_itself() {
-        let result = validate_path(".", "/home/user/project");
+        let result = validate_path(".", test_working_dir());
         assert!(result.is_ok());
     }
 
     #[test]
     fn rejects_path_traversal() {
-        let result = validate_path("../../etc/passwd", "/home/user/project");
+        let result = validate_path("../../etc/passwd", test_working_dir());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Access denied"));
     }
 
     #[test]
     fn rejects_absolute_path_outside() {
-        let result = validate_path("/etc/passwd", "/home/user/project");
+        let outside = if cfg!(windows) {
+            r"C:\Windows\System32"
+        } else {
+            "/etc/passwd"
+        };
+        let result = validate_path(outside, test_working_dir());
         assert!(result.is_err());
     }
 
     #[test]
     fn allows_absolute_path_inside() {
-        let result = validate_path("/home/user/project/file.txt", "/home/user/project");
-        // absolute path join: /home/user/project + /home/user/project/file.txt
-        // Path::join with an absolute second path replaces the first
-        // So this resolves to /home/user/project/file.txt which IS inside
+        let wd = test_working_dir();
+        let inside = PathBuf::from(wd).join("file.txt");
+        let inside_str = inside.to_string_lossy();
+        // Path::join with an absolute second path replaces the first,
+        // so this resolves to the path itself which IS inside.
+        let result = validate_path(&inside_str, wd);
         assert!(result.is_ok());
     }
 }

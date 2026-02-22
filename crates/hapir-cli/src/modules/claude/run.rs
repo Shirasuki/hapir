@@ -427,9 +427,16 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
                 debug!("[runClaude] abort RPC received");
                 let pid = cs.active_pid.load(Ordering::Relaxed);
                 if pid != 0 {
-                    debug!("[runClaude] Sending SIGTERM to PID {}", pid);
+                    debug!("[runClaude] Terminating PID {}", pid);
+                    #[cfg(unix)]
                     unsafe {
                         libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/PID", &pid.to_string(), "/T"])
+                            .spawn();
                     }
                 }
                 cs.pending_permissions.lock().await.clear();

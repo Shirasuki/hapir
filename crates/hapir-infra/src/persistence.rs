@@ -198,7 +198,26 @@ pub fn is_process_alive(pid: u32) -> bool {
         // kill(pid, 0) checks if process exists without sending a signal
         unsafe { libc::kill(pid as i32, 0) == 0 }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            // Check if process has exited
+            let mut exit_code: u32 = 0;
+            let ok = GetExitCodeProcess(handle, &mut exit_code);
+            CloseHandle(handle);
+            // STILL_ACTIVE (259) means the process is still running
+            ok != 0 && exit_code == 259
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         false

@@ -117,24 +117,36 @@ impl RunnerLifecycle {
         process::exit(code);
     }
 
-    /// Register SIGTERM and SIGINT handlers that trigger cleanup.
+    /// Register OS signal handlers that trigger cleanup.
     pub fn register_process_handlers(self: &Arc<Self>) {
         let lifecycle = self.clone();
         tokio::spawn(async move {
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("failed to register SIGTERM handler");
-            let mut sigint =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                    .expect("failed to register SIGINT handler");
+            #[cfg(unix)]
+            {
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("failed to register SIGTERM handler");
+                let mut sigint =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                        .expect("failed to register SIGINT handler");
 
-            tokio::select! {
-                _ = sigterm.recv() => {
-                    lifecycle.cleanup_and_exit(None).await;
+                tokio::select! {
+                    _ = sigterm.recv() => {
+                        lifecycle.cleanup_and_exit(None).await;
+                    }
+                    _ = sigint.recv() => {
+                        lifecycle.cleanup_and_exit(None).await;
+                    }
                 }
-                _ = sigint.recv() => {
-                    lifecycle.cleanup_and_exit(None).await;
-                }
+            }
+
+            #[cfg(not(unix))]
+            {
+                // On Windows, only Ctrl+C is available via tokio::signal
+                tokio::signal::ctrl_c()
+                    .await
+                    .expect("failed to install Ctrl+C handler");
+                lifecycle.cleanup_and_exit(None).await;
             }
         });
     }
