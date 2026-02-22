@@ -7,3 +7,4 @@ pub mod run;
 pub mod sdk;
 pub mod session;
 pub mod types;
+pub mod version_check;

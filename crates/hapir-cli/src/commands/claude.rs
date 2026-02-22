@@ -5,6 +5,7 @@ use tracing::{debug, error};
 use crate::commands::common;
 use hapir_infra::config::Configuration;
 use crate::modules::claude::run::{StartOptions, run_claude};
+use crate::modules::claude::version_check::check_claude_version;
 
 /// Run the default (claude) command.
 ///
@@ -12,6 +13,8 @@ use crate::modules::claude::run::{StartOptions, run_claude};
 /// token, register machine, ensure runner, then hand off to `run_claude`.
 pub async fn run(args: ClaudeArgs) -> Result<()> {
     debug!(?args, "claude command starting");
+
+    check_claude_version()?;
 
     let mut config = Configuration::create()?;
 
