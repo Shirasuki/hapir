@@ -1,8 +1,3 @@
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
-use serde_json::json;
-use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
 use control_server::RunnerState;
 use hapir_infra::auth;
 use hapir_infra::config::Configuration;
@@ -11,6 +6,11 @@ use hapir_infra::machine::build_machine_metadata;
 use hapir_infra::persistence;
 use hapir_infra::process::spawn_runner_background;
 use hapir_infra::ws::machine_client::WsMachineClient;
+use serde_json::json;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime};
+use tokio::sync::mpsc;
+use tracing::{debug, info, warn};
 
 use crate::control_server;
 use crate::types::ShutdownSource;
@@ -137,8 +137,7 @@ pub async fn start_sync(config: &Configuration) -> anyhow::Result<()> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(60_000);
         Some(tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(Duration::from_millis(heartbeat_ms));
+            let mut interval = tokio::time::interval(Duration::from_millis(heartbeat_ms));
             loop {
                 interval.tick().await;
 
@@ -435,8 +434,7 @@ async fn connect_to_hub(
         handlers::register_all_handlers(ws.as_ref(), &cwd).await;
     }
 
-    ws.connect_and_wait(Duration::from_secs(10))
-        .await?;
+    ws.connect_and_wait(Duration::from_secs(10)).await?;
 
     let meta = build_machine_metadata(config);
     ws.update_metadata(|_| serde_json::to_value(&meta).unwrap_or(json!({})))
@@ -462,32 +460,15 @@ async fn connect_to_hub(
 
 /// Current time as epoch milliseconds.
 fn epoch_ms() -> i64 {
-    std::time::SystemTime::now()
+    SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
 }
 
-/// Format current time as a human-readable string.
+/// Format current time as a human-readable local string (MM/DD/YYYY, HH:MM:SS AM/PM).
 fn format_locale_time() -> String {
-    #[cfg(unix)]
-    {
-        std::process::Command::new("date")
-            .arg("+%m/%d/%Y, %I:%M:%S %p")
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| epoch_ms().to_string())
-    }
-    #[cfg(not(unix))]
-    {
-        // On Windows, `date` is not available; fall back to epoch ms.
-        epoch_ms().to_string()
-    }
+    chrono::Local::now()
+        .format("%m/%d/%Y, %I:%M:%S %p")
+        .to_string()
 }

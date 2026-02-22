@@ -24,6 +24,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sys-locale = "0.3"
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 arc-swap = { version = "1.8.2", features = ["serde"] }
+chrono = "0.4"
 
 [package]
 name = "hapir"
