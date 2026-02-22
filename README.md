@@ -46,6 +46,7 @@ The frontend is a React 19 + Vite + Tailwind CSS PWA. TypeScript types are auto-
 
 - Rust nightly (edition 2024, resolver 3)
 - [Bun](https://bun.sh/) (for frontend)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) >= 2.1.47 (for Claude agent)
 
 ## Build
 

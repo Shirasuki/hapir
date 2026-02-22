@@ -46,6 +46,7 @@ hapir/
 
 - Rust nightly（edition 2024，resolver 3）
 - [Bun](https://bun.sh/)（用于前端）
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) >= 2.1.47（用于 Claude 代理）
 
 ## 构建
 
