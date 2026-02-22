@@ -35,6 +35,8 @@ pub struct AgentSessionConfig {
 pub enum PromptContent {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "localImage")]
+    LocalImage { path: String },
 }
 
 // --- Plan item ---

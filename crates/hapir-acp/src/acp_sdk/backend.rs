@@ -422,6 +422,9 @@ impl AgentBackend for AcpSdkBackend {
                     PromptContent::Text { text } => {
                         serde_json::json!({"type": "text", "text": text})
                     }
+                    PromptContent::LocalImage { path } => {
+                        serde_json::json!({"type": "image", "path": path})
+                    }
                 })
                 .collect();
 

@@ -353,6 +353,10 @@ impl AgentBackend for CodexAppServerBackend {
                         "type": "text",
                         "text": text,
                     }),
+                    PromptContent::LocalImage { path } => serde_json::json!({
+                        "type": "localImage",
+                        "path": path,
+                    }),
                 })
                 .collect();
 

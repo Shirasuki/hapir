@@ -227,10 +227,13 @@ pub async fn run(
     let queue_for_rpc = queue.clone();
     let current_mode = Arc::new(Mutex::new(initial_mode));
     let mode_for_rpc = current_mode.clone();
+    let pending_attachments: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let attachments_for_rpc = pending_attachments.clone();
     ws_client
         .register_rpc("on-user-message", move |params| {
             let q = queue_for_rpc.clone();
             let mode = mode_for_rpc.clone();
+            let att = attachments_for_rpc.clone();
             Box::pin(async move {
                 let message = params
                     .get("message")
@@ -240,6 +243,19 @@ pub async fn run(
 
                 if message.is_empty() {
                     return serde_json::json!({"ok": false, "reason": "empty message"});
+                }
+
+                // Extract attachment paths from the params
+                if let Some(attachments) = params.get("attachments").and_then(|v| v.as_array()) {
+                    let paths: Vec<String> = attachments
+                        .iter()
+                        .filter_map(|a| a.get("path").and_then(|p| p.as_str()))
+                        .map(|s| s.to_string())
+                        .collect();
+                    if !paths.is_empty() {
+                        debug!("[runCodex] Received {} attachment(s)", paths.len());
+                        att.lock().await.extend(paths);
+                    }
                 }
 
                 let current = mode.lock().await.clone();
@@ -440,6 +456,7 @@ pub async fn run(
     let sb_for_remote = session_base.clone();
     let backend_for_remote = backend.clone();
     let resume_thread_id: Option<String> = resume.map(|s| s.to_string());
+    let attachments_for_remote = pending_attachments.clone();
 
     let loop_result = run_local_remote_session(LoopOptions {
         session: session_base.clone(),
@@ -453,7 +470,8 @@ pub async fn run(
             let sb = sb_for_remote.clone();
             let b = backend_for_remote.clone();
             let resume = resume_thread_id.clone();
-            Box::pin(async move { codex_remote_launcher(&sb, &b, resume.as_deref()).await })
+            let att = attachments_for_remote.clone();
+            Box::pin(async move { codex_remote_launcher(&sb, &b, resume.as_deref(), att).await })
         }),
         on_session_ready: None,
     })
@@ -512,6 +530,7 @@ async fn codex_remote_launcher(
     session: &Arc<AgentSessionBase<CodexMode>>,
     backend: &Arc<CodexAppServerBackend>,
     resume_thread_id: Option<&str>,
+    pending_attachments: Arc<Mutex<Vec<String>>>,
 ) -> LoopResult {
     let working_directory = session.path.clone();
     debug!("[codexRemoteLauncher] Starting in {}", working_directory);
@@ -644,7 +663,11 @@ async fn codex_remote_launcher(
             let _ = msg_tx.send(msg);
         });
 
-        let content = vec![PromptContent::Text { text: prompt }];
+        let mut content = vec![PromptContent::Text { text: prompt }];
+        let image_paths: Vec<String> = pending_attachments.lock().await.drain(..).collect();
+        for path in image_paths {
+            content.push(PromptContent::LocalImage { path });
+        }
         if let Err(e) = backend.prompt(&thread_id, content, on_update).await {
             warn!("[codexRemoteLauncher] Prompt error: {}", e);
             session
