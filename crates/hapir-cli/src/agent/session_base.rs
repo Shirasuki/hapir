@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 use tracing::debug;
@@ -76,6 +76,8 @@ pub struct AgentSessionBase<Mode: Clone + Send + 'static> {
     keep_alive_handle: std::sync::Mutex<Option<JoinHandle<()>>>,
     permission_mode: Arc<Mutex<Option<PermissionMode>>>,
     model_mode: Arc<Mutex<Option<ModelMode>>>,
+    /// Signalled to request a mode switch (local↔remote).
+    pub switch_notify: Arc<Notify>,
 }
 
 impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
@@ -99,6 +101,7 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
             keep_alive_handle: std::sync::Mutex::new(None),
             permission_mode: Arc::new(Mutex::new(opts.permission_mode)),
             model_mode: Arc::new(Mutex::new(opts.model_mode)),
+            switch_notify: Arc::new(Notify::new()),
         });
 
         // Start keep-alive interval (first session-alive is sent by the

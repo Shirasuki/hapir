@@ -474,6 +474,7 @@ pub async fn run(
             Box::pin(async move { codex_remote_launcher(&sb, &b, resume.as_deref(), att).await })
         }),
         on_session_ready: None,
+        terminal_reclaim: false,
     })
     .await;
 

@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 use hapir_infra::ws::session_client::WsSessionClient;
+use crate::terminal_utils::restore_terminal_state;
 
 type AsyncClosureFn =
     dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync;
@@ -113,6 +114,7 @@ impl RunnerLifecycle {
         }
 
         self.cleanup().await;
+        restore_terminal_state();
         let code = *self.exit_code.lock().await;
         process::exit(code);
     }
@@ -166,20 +168,13 @@ pub async fn set_controlled_by_user(
         .await;
 }
 
-/// Create a mode-change handler that sends a switch event and updates controlledByUser.
+/// Create a mode-change handler that updates controlledByUser on the agent state.
 pub fn create_mode_change_handler(
     ws_client: Arc<WsSessionClient>,
 ) -> Box<dyn Fn(super::session_base::SessionMode) + Send + Sync> {
     Box::new(move |mode| {
         let client = ws_client.clone();
         tokio::spawn(async move {
-            let mode_str = mode.as_str();
-            client
-                .send_message(serde_json::json!({
-                    "type": "switch",
-                    "mode": mode_str,
-                }))
-                .await;
             set_controlled_by_user(&client, mode).await;
         });
     })

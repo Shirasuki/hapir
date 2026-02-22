@@ -266,6 +266,7 @@ export default {
   'misc.loadingMessages': 'Loading messages…',
   'misc.typeMessage': "Type 'continue' to resume...",
   'misc.typeAMessage': 'Type a message...',
+  'misc.typeToTakeover': 'Send a message to take over from CLI...',
   'misc.offline': 'offline',
   'misc.permissionRequired': 'permission required',
 

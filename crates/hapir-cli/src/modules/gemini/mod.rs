@@ -304,6 +304,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
             Box::pin(async move { gemini_remote_launcher(&sb, &b).await })
         }),
         on_session_ready: None,
+        terminal_reclaim: false,
     })
     .await;
 

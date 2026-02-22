@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
+use tokio::select;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -72,14 +73,28 @@ pub async fn claude_remote_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) 
 
     loop {
         info!("[claudeRemoteLauncher] Waiting for messages from queue...");
-        let batch = match session.base.queue.wait_for_messages().await {
-            Some(batch) => batch,
-            None => {
-                debug!("[claudeRemoteLauncher] Queue closed, exiting");
-                if let Some(ref qh) = query_handle {
-                    qh.close_stdin().await;
+
+        // Wait for either a queued message or a switch request.
+        let batch = select! {
+            batch = session.base.queue.wait_for_messages() => {
+                match batch {
+                    Some(b) => b,
+                    None => {
+                        debug!("[claudeRemoteLauncher] Queue closed, exiting");
+                        if let Some(ref qh) = query_handle {
+                            qh.close_stdin().await;
+                        }
+                        return LoopResult::Exit;
+                    }
                 }
-                return LoopResult::Exit;
+            }
+            _ = session.base.switch_notify.notified() => {
+                info!("[claudeRemoteLauncher] Switch requested, stopping remote launcher");
+                if let Some(ref qh) = query_handle {
+                    qh.kill().await;
+                }
+                session.active_pid.store(0, Ordering::Relaxed);
+                return LoopResult::Switch;
             }
         };
 

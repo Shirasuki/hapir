@@ -268,6 +268,7 @@ export default {
   'misc.loadingMessages': '加载消息中…',
   'misc.typeMessage': "输入 'continue' 继续...",
   'misc.typeAMessage': '输入消息...',
+  'misc.typeToTakeover': '发送消息以从 CLI 接管控制...',
   'misc.offline': '离线',
   'misc.permissionRequired': '需要权限',
 

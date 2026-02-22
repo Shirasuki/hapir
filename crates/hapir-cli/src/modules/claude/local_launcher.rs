@@ -1,12 +1,13 @@
-use std::sync::Arc;
-
-use tracing::{debug, warn};
-
 use crate::agent::local_launch_policy::{
     LocalLaunchContext, LocalLaunchExitReason, get_local_launch_exit_reason,
 };
 use crate::agent::loop_base::LoopResult;
-use crate::modules::claude::session::{ClaudeSession, StartedBy};
+use crate::modules::claude::session::ClaudeSession;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use tokio::process::Command;
+use tokio::select;
+use tracing::{debug, info, warn};
 
 use super::run::EnhancedMode;
 
@@ -14,16 +15,24 @@ use super::run::EnhancedMode;
 ///
 /// Spawns the `claude` CLI process in local/interactive mode and manages
 /// the local launch lifecycle. Message sync is handled by the hook server.
+///
+/// Listens for `switch_notify` to allow external mode-switch requests
+/// (e.g. from the web UI) to kill the TUI and trigger a switch to remote.
 pub async fn claude_local_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) -> LoopResult {
     let working_directory = session.base.path.clone();
     debug!("[claudeLocalLauncher] Starting in {}", working_directory);
 
-    // Build CLI arguments for local (interactive) mode
     let mut args: Vec<String> = Vec::new();
 
     if !session.hook_settings_path.is_empty() {
         args.push("--settings".to_string());
         args.push(session.hook_settings_path.clone());
+    }
+
+    // Resume the existing Claude session if one was established in remote mode
+    if let Some(ref sid) = *session.base.session_id.lock().await {
+        args.push("--resume".to_string());
+        args.push(sid.clone());
     }
 
     if let Some(ref extra_args) = *session.claude_args.lock().await {
@@ -35,7 +44,7 @@ pub async fn claude_local_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) -
         args
     );
 
-    let mut cmd = tokio::process::Command::new("claude");
+    let mut cmd = Command::new("claude");
     cmd.args(&args).current_dir(&working_directory);
 
     if let Some(ref env_vars) = session.claude_env_vars {
@@ -44,11 +53,8 @@ pub async fn claude_local_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) -
         }
     }
 
-    match cmd.status().await {
-        Ok(status) => {
-            debug!("[claudeLocalLauncher] Claude process exited: {:?}", status);
-            session.consume_one_time_flags().await;
-        }
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
         Err(e) => {
             warn!("[claudeLocalLauncher] Failed to spawn claude: {}", e);
             session.record_local_launch_failure(
@@ -63,16 +69,38 @@ pub async fn claude_local_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) -
                     "message": format!("Failed to launch claude CLI: {}", e),
                 }))
                 .await;
+            return LoopResult::Exit;
         }
     };
 
-    let shared_started_by = match session.started_by {
-        StartedBy::Runner => hapir_shared::schemas::StartedBy::Runner,
-        StartedBy::Terminal => hapir_shared::schemas::StartedBy::Terminal,
+    if let Some(pid) = child.id() {
+        session.active_pid.store(pid, Ordering::Relaxed);
+    }
+
+    let switched = select! {
+        status = child.wait() => {
+            match status {
+                Ok(s) => debug!("[claudeLocalLauncher] Claude process exited: {:?}", s),
+                Err(e) => warn!("[claudeLocalLauncher] Error waiting for claude: {}", e),
+            }
+            session.consume_one_time_flags().await;
+            false
+        }
+        _ = session.base.switch_notify.notified() => {
+            info!("[claudeLocalLauncher] Switch requested, killing TUI process");
+            let _ = child.kill().await;
+            true
+        }
     };
 
+    session.active_pid.store(0, Ordering::Relaxed);
+
+    if switched {
+        return LoopResult::Switch;
+    }
+
     let exit_reason = get_local_launch_exit_reason(&LocalLaunchContext {
-        started_by: Some(shared_started_by),
+        started_by: Some(session.started_by),
         starting_mode: Some(session.starting_mode),
     });
 

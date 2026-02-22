@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use hapir_shared::schemas::StartedBy as SharedStartedBy;
+use hapir_shared::schemas::StartedBy;
 
 use super::local_launcher::claude_local_launcher;
 use super::remote_launcher::claude_remote_launcher;
@@ -18,10 +18,11 @@ use crate::agent::runner_lifecycle::{
 use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions, SessionMode};
 use crate::agent::session_factory::{SessionBootstrapOptions, bootstrap_session};
 use crate::modules::claude::hook_server::start_hook_server;
-use crate::modules::claude::session::{ClaudeSession, StartedBy};
+use crate::modules::claude::session::ClaudeSession;
 use hapir_infra::config::Configuration;
 use hapir_infra::handlers::uploads;
 use hapir_infra::utils::message_queue::MessageQueue2;
+use crate::terminal_utils::{restore_terminal_state, save_terminal_state};
 
 /// Options for starting a Claude session.
 #[derive(Debug, Clone, Default)]
@@ -71,19 +72,11 @@ fn compute_mode_hash(mode: &EnhancedMode) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Map a string started_by value to the session-local StartedBy enum.
+/// Map a string started_by value to the StartedBy enum.
 fn resolve_started_by(value: Option<&str>) -> StartedBy {
     match value {
         Some("runner") => StartedBy::Runner,
         _ => StartedBy::Terminal,
-    }
-}
-
-/// Map a string started_by value to the shared StartedBy enum.
-fn resolve_shared_started_by(value: Option<&str>) -> SharedStartedBy {
-    match value {
-        Some("runner") => SharedStartedBy::Runner,
-        _ => SharedStartedBy::Terminal,
     }
 }
 
@@ -110,8 +103,9 @@ fn resolve_starting_mode(options: &StartOptions, started_by: StartedBy) -> Sessi
 pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
     let working_directory = std::env::current_dir()?.to_string_lossy().to_string();
 
+    save_terminal_state();
+
     let started_by = resolve_started_by(options.started_by.as_deref());
-    let shared_started_by = resolve_shared_started_by(options.started_by.as_deref());
     let starting_mode = resolve_starting_mode(&options, started_by);
 
     debug!(
@@ -124,7 +118,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "claude".to_string(),
-            started_by: Some(shared_started_by),
+            started_by: Some(started_by),
             working_directory: Some(working_directory.clone()),
             tag: None,
             agent_state: Some(serde_json::json!({
@@ -263,10 +257,14 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
     let queue_for_rpc = queue.clone();
     let current_mode = Arc::new(Mutex::new(initial_mode));
     let mode_for_rpc = current_mode.clone();
+    let switch_for_msg = session_base.switch_notify.clone();
+    let hook_mode_for_rpc = hook_session_mode.clone();
     ws_client
         .register_rpc("on-user-message", move |params| {
             let q = queue_for_rpc.clone();
             let mode = mode_for_rpc.clone();
+            let switch_notify = switch_for_msg.clone();
+            let session_mode = hook_mode_for_rpc.clone();
             Box::pin(async move {
                 info!("[runClaude] on-user-message RPC received: {:?}", params);
                 let text = params
@@ -314,6 +312,14 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
                     q.push_isolate_and_clear(message, current).await;
                 } else {
                     q.push(message, current).await;
+                }
+
+                // If in local mode, signal a switch to remote so the
+                // queued message gets consumed by the remote launcher.
+                let is_local = *session_mode.lock().unwrap() == SessionMode::Local;
+                if is_local {
+                    info!("[runClaude] Local mode: web message received, requesting switch to remote");
+                    switch_notify.notify_one();
                 }
 
                 serde_json::json!({"ok": true})
@@ -456,6 +462,19 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
         })
         .await;
 
+    // Register switch RPC handler (hub calls this to switch local↔remote)
+    let switch_for_rpc = session_base.switch_notify.clone();
+    ws_client
+        .register_rpc("switch", move |_params| {
+            let switch_notify = switch_for_rpc.clone();
+            Box::pin(async move {
+                info!("[runClaude] switch RPC received, requesting mode switch");
+                switch_notify.notify_one();
+                serde_json::json!({"ok": true})
+            })
+        })
+        .await;
+
     // Set up terminal manager
     let terminal_mgr =
         crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
@@ -481,6 +500,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
             Box::pin(async move { claude_remote_launcher(&cs).await })
         }),
         on_session_ready: None,
+        terminal_reclaim: started_by == StartedBy::Terminal,
     })
     .await;
 
@@ -517,6 +537,8 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
 
     // Cleanup lifecycle
     lifecycle.cleanup().await;
+
+    restore_terminal_state();
 
     if let Err(e) = loop_result {
         error!("[runClaude] Loop error: {}", e);
