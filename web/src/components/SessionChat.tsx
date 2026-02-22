@@ -292,6 +292,7 @@ export function SessionChat(props: {
                         sessionId={props.session.id}
                         metadata={props.session.metadata}
                         disabled={sessionInactive}
+                        thinking={props.session.thinking}
                         onRefresh={props.onRefresh}
                         onRetryMessage={props.onRetryMessage}
                         onFlushPending={props.onFlushPending}

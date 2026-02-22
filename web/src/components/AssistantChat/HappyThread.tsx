@@ -60,6 +60,7 @@ export function HappyThread(props: {
     sessionId: string
     metadata: SessionMetadataSummary | null
     disabled: boolean
+    thinking?: boolean
     onRefresh: () => void
     onRetryMessage?: (localId: string) => void
     onFlushPending: () => void
@@ -91,6 +92,8 @@ export function HappyThread(props: {
     const onAtBottomChangeRef = useRef(props.onAtBottomChange)
     const onFlushPendingRef = useRef(props.onFlushPending)
     const forceScrollTokenRef = useRef(props.forceScrollToken)
+    const thinkingRef = useRef(props.thinking ?? false)
+    const initialScrollDoneRef = useRef(false)
 
     // Smart scroll state: autoScroll enabled when user is near bottom
     const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
@@ -115,6 +118,9 @@ export function HappyThread(props: {
     useEffect(() => {
         onLoadMoreRef.current = props.onLoadMore
     }, [props.onLoadMore])
+    useEffect(() => {
+        thinkingRef.current = props.thinking ?? false
+    }, [props.thinking])
 
     // Track scroll position to toggle autoScroll (stable listener using refs)
     useEffect(() => {
@@ -166,7 +172,21 @@ export function HappyThread(props: {
         atBottomRef.current = true
         onAtBottomChangeRef.current(true)
         forceScrollTokenRef.current = props.forceScrollToken
+        initialScrollDoneRef.current = false
     }, [props.sessionId])
+
+    // Scroll to bottom once after messages are first loaded and rendered
+    useEffect(() => {
+        if (initialScrollDoneRef.current) return
+        if (props.isLoadingMessages || props.rawMessagesCount === 0) return
+        initialScrollDoneRef.current = true
+        requestAnimationFrame(() => {
+            const viewport = viewportRef.current
+            if (viewport) {
+                viewport.scrollTo({ top: viewport.scrollHeight })
+            }
+        })
+    }, [props.isLoadingMessages, props.rawMessagesCount])
 
     useEffect(() => {
         if (forceScrollTokenRef.current === props.forceScrollToken) {
@@ -278,7 +298,13 @@ export function HappyThread(props: {
             onRetryMessage: props.onRetryMessage
         }}>
             <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col relative">
-                <ThreadPrimitive.Viewport asChild autoScroll={autoScrollEnabled}>
+                <ThreadPrimitive.Viewport
+                    asChild
+                    autoScroll={autoScrollEnabled && !!props.thinking}
+                    scrollToBottomOnRunStart={false}
+                    scrollToBottomOnInitialize={false}
+                    scrollToBottomOnThreadSwitch={false}
+                >
                     <div ref={viewportRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
                         <div className="mx-auto w-full max-w-content min-w-0 p-3">
                             <div ref={topSentinelRef} className="h-px w-full" aria-hidden="true" />
