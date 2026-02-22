@@ -470,16 +470,24 @@ fn epoch_ms() -> i64 {
 
 /// Format current time as a human-readable string.
 fn format_locale_time() -> String {
-    std::process::Command::new("date")
-        .arg("+%m/%d/%Y, %I:%M:%S %p")
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| epoch_ms().to_string())
+    #[cfg(unix)]
+    {
+        std::process::Command::new("date")
+            .arg("+%m/%d/%Y, %I:%M:%S %p")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| epoch_ms().to_string())
+    }
+    #[cfg(not(unix))]
+    {
+        // On Windows, `date` is not available; fall back to epoch ms.
+        epoch_ms().to_string()
+    }
 }
