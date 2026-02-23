@@ -1,8 +1,12 @@
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::outbox::SocketOutbox;
+use super::protocol::{WsMessage, WsRequest};
+use crate::utils::time::epoch_ms;
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
@@ -10,34 +14,19 @@ use tokio::time;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
-use super::outbox::SocketOutbox;
-use super::protocol::{WsMessage, WsRequest};
-
-// --- Heartbeat / reconnection constants ---
 const PING_INTERVAL: Duration = Duration::from_secs(25);
 const PONG_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Configuration for the WebSocket client
 #[derive(Debug, Clone)]
 pub struct WsClientConfig {
     pub url: String,
     pub auth_token: String,
-    pub client_type: String, // "session-scoped" or "machine-scoped"
-    pub scope_id: String,    // session ID or machine ID
-    /// Max reconnection attempts (None = unlimited). Resets after each successful connection.
+    pub client_type: String,
+    pub scope_id: String,
     pub max_reconnect_attempts: Option<usize>,
 }
 
-/// Monotonic epoch millis for lock-free last-activity tracking.
-fn epoch_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-/// Connection state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
     Disconnected,
@@ -45,55 +34,25 @@ pub enum ConnectionState {
     Connected,
 }
 
-/// Event handler callback type
 type EventHandler = Box<dyn Fn(Value) + Send + Sync>;
-
-/// RPC request handler type
-type RpcHandler = Arc<
-    dyn Fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send>>
-        + Send
-        + Sync,
->;
+type RpcHandler = Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
 
 type ConnectionCallback = Box<dyn Fn() + Send + Sync>;
 
 pub struct WsClient {
     config: WsClientConfig,
     state: Arc<RwLock<ConnectionState>>,
-
-    /// Channel to send messages to the write task
     tx: Arc<Mutex<Option<mpsc::UnboundedSender<Message>>>>,
-
-    /// Pending ack callbacks: request_id -> oneshot sender
     pending_acks: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
-
-    /// Event handlers: event_name -> handler
     event_handlers: Arc<RwLock<HashMap<String, EventHandler>>>,
-
-    /// RPC handlers: method_name -> handler
     rpc_handlers: Arc<RwLock<HashMap<String, RpcHandler>>>,
-
-    /// Offline message buffer
     outbox: Arc<Mutex<SocketOutbox>>,
-
-    /// Notify when connected (for reconnection logic)
     connected_notify: Arc<Notify>,
-
-    /// Shutdown signal
     shutdown: Arc<Notify>,
     shutdown_flag: Arc<AtomicBool>,
-
-    /// Has connected at least once
     has_connected_once: Arc<AtomicBool>,
-
-    /// Last time we received any data (epoch ms, lock-free)
     last_activity: Arc<AtomicU64>,
-
-    /// Messages to send on every (re)connect, after RPC re-registration.
-    /// Pre-serialized JSON strings.
     connect_messages: Arc<Mutex<Vec<String>>>,
-
-    /// Connection callbacks
     on_connect: Arc<Mutex<Option<ConnectionCallback>>>,
     on_disconnect: Arc<Mutex<Option<ConnectionCallback>>>,
 }
@@ -119,7 +78,6 @@ impl WsClient {
         }
     }
 
-    /// Register an event handler.
     pub async fn on(
         &self,
         event: impl Into<String>,
@@ -131,14 +89,10 @@ impl WsClient {
             .insert(event.into(), Box::new(handler));
     }
 
-    /// Register an RPC handler.
     pub async fn register_rpc(
         &self,
         method: impl Into<String>,
-        handler: impl Fn(Value) -> std::pin::Pin<Box<dyn Future<Output = Value> + Send>>
-        + Send
-        + Sync
-        + 'static,
+        handler: impl Fn(Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync + 'static,
     ) {
         self.rpc_handlers
             .write()
@@ -146,8 +100,6 @@ impl WsClient {
             .insert(method.into(), Arc::new(handler));
     }
 
-    /// Register a message to be sent on every (re)connect, after RPC re-registration.
-    /// The message is constructed from an event name and data payload.
     pub async fn add_connect_message(&self, event: impl Into<String>, data: Value) {
         let req = WsRequest::fire(event, data);
         if let Ok(json) = serde_json::to_string(&req) {
@@ -155,19 +107,16 @@ impl WsClient {
         }
     }
 
-    /// Set connection callback.
     #[allow(dead_code)]
     pub async fn on_connect(&self, f: impl Fn() + Send + Sync + 'static) {
         *self.on_connect.lock().await = Some(Box::new(f));
     }
 
-    /// Set disconnection callback.
     #[allow(dead_code)]
     pub async fn on_disconnect(&self, f: impl Fn() + Send + Sync + 'static) {
         *self.on_disconnect.lock().await = Some(Box::new(f));
     }
 
-    /// Send a fire-and-forget event.
     pub async fn emit(&self, event: impl Into<String>, data: Value) {
         let req = WsRequest::fire(event, data);
         let json = match serde_json::to_string(&req) {
@@ -175,9 +124,8 @@ impl WsClient {
             Err(_) => return,
         };
 
-        // Hold tx lock while checking and potentially enqueueing to outbox.
-        // This prevents a race with the connect task's flush-under-lock.
-        let tx_guard = self.tx.lock().await;
+        // Hold tx lock to prevent race with outbox flush
+    let tx_guard = self.tx.lock().await;
         if let Some(tx) = tx_guard.as_ref() {
             let _ = tx.send(Message::Text(json.into()));
         } else {
@@ -185,7 +133,6 @@ impl WsClient {
         }
     }
 
-    /// Send an event and wait for ack response.
     pub async fn emit_with_ack(
         &self,
         event: impl Into<String>,
@@ -215,7 +162,6 @@ impl WsClient {
         }
     }
 
-    /// Start the WebSocket client with auto-reconnection, heartbeat, and connect timeout.
     pub async fn connect(&self) {
         let config = self.config.clone();
         let state = self.state.clone();
@@ -302,14 +248,12 @@ impl WsClient {
                 let (mut write, mut read) = ws_stream.split();
                 let (send_tx, mut send_rx) = mpsc::unbounded_channel::<Message>();
 
-                // Hold tx lock while flushing outbox and re-registering RPC handlers.
-                // This prevents a race where emit() checks tx (None), then we set tx
-                // and flush, then emit() enqueues to the already-flushed outbox.
+                // Hold tx lock while flushing outbox and re-registering,
+                // prevents race with emit() enqueueing to already-flushed outbox.
                 {
                     let mut tx_guard = tx_holder.lock().await;
                     *tx_guard = Some(send_tx.clone());
 
-                    // Flush outbox
                     {
                         let mut ob = outbox.lock().await;
                         for msg in ob.drain() {
@@ -317,8 +261,6 @@ impl WsClient {
                         }
                     }
 
-                    // Re-register all RPC handlers with the hub so it knows
-                    // which methods this connection handles.
                     {
                         let handlers = rpc_handlers.read().await;
                         for method in handlers.keys() {
@@ -338,8 +280,7 @@ impl WsClient {
                         }
                     }
 
-                    // Send connect messages (e.g. session-alive) after RPC registration
-                    // to guarantee the hub has all handlers before it sees the session online.
+                    // Send connect messages after RPC registration
                     {
                         let msgs = connect_messages.lock().await;
                         for msg in msgs.iter() {
@@ -353,7 +294,7 @@ impl WsClient {
                 }
                 connected_notify.notify_waiters();
 
-                // --- Write task ---
+                // --- Write ---
                 let write_shutdown = shutdown_flag.clone();
                 let write_task = async {
                     while let Some(msg) = send_rx.recv().await {
@@ -366,7 +307,7 @@ impl WsClient {
                     }
                 };
 
-                // --- Ping task (heartbeat) ---
+                // --- Ping ---
                 let ping_tx = send_tx.clone();
                 let ping_shutdown = shutdown_flag.clone();
                 let ping_task = async {
@@ -383,7 +324,7 @@ impl WsClient {
                     }
                 };
 
-                // --- Watchdog task (detect dead connection) ---
+                // --- Watchdog ---
                 let wd_activity = last_activity.clone();
                 let wd_shutdown = shutdown_flag.clone();
                 let dead_timeout = PING_INTERVAL + PONG_TIMEOUT; // 35s
@@ -406,7 +347,7 @@ impl WsClient {
                     }
                 };
 
-                // --- Read task ---
+                // --- Read ---
                 let read_pending = pending_acks.clone();
                 let read_handlers = event_handlers.clone();
                 let read_rpcs = rpc_handlers.clone();
@@ -418,14 +359,12 @@ impl WsClient {
                         if read_shutdown.load(Ordering::Relaxed) {
                             break;
                         }
-                        // Any received frame counts as activity
                         read_activity.store(epoch_ms(), Ordering::Relaxed);
 
                         match msg {
                             Ok(Message::Text(text)) => {
                                 let text_str: &str = &text;
                                 if let Ok(ws_msg) = serde_json::from_str::<WsMessage>(text_str) {
-                                    // Ack response
                                     if let Some(ref id) = ws_msg.id
                                         && ws_msg.event.ends_with(":ack")
                                         && let Some(sender) = read_pending.lock().await.remove(id)
@@ -434,7 +373,6 @@ impl WsClient {
                                         continue;
                                     }
 
-                                    // RPC request
                                     if ws_msg.event == "rpc-request"
                                         && let Some(ref id) = ws_msg.id
                                     {
@@ -448,7 +386,7 @@ impl WsClient {
                                             .get("params")
                                             .cloned()
                                             .unwrap_or(Value::Null);
-                                        // Hub sends params as a JSON-encoded string; parse it back
+                                        // Hub sends params as JSON-encoded string
                                         let params = match params_raw {
                                             Value::String(ref s) => {
                                                 serde_json::from_str(s).unwrap_or(params_raw)
@@ -480,7 +418,6 @@ impl WsClient {
                                         continue;
                                     }
 
-                                    // Event handler
                                     if let Some(handler) =
                                         read_handlers.read().await.get(&ws_msg.event)
                                     {
@@ -488,9 +425,7 @@ impl WsClient {
                                     }
                                 }
                             }
-                            Ok(Message::Pong(_)) => {
-                                // Activity already recorded above
-                            }
+                            Ok(Message::Pong(_)) => {}
                             Ok(Message::Close(_)) => break,
                             Err(e) => {
                                 warn!(error = %e, "WebSocket read error");
@@ -529,7 +464,6 @@ impl WsClient {
         });
     }
 
-    /// Wait for backoff duration, respecting shutdown.
     async fn wait_backoff(
         shutdown_flag: &AtomicBool,
         shutdown: &Notify,
@@ -550,20 +484,17 @@ impl WsClient {
         *backoff = (*backoff * 2).min(max_backoff);
     }
 
-    /// Disconnect and stop reconnection.
     pub async fn close(&self) {
         self.shutdown_flag.store(true, Ordering::Relaxed);
         self.shutdown.notify_one();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    /// Check if currently connected.
     #[allow(dead_code)]
     pub async fn is_connected(&self) -> bool {
         *self.state.read().await == ConnectionState::Connected
     }
 
-    /// Wait until connected (or timeout).
     #[allow(dead_code)]
     pub async fn wait_connected(&self, timeout: Duration) -> bool {
         if self.is_connected().await {
@@ -574,8 +505,6 @@ impl WsClient {
             .is_ok()
     }
 
-    /// Connect and wait for the first successful connection.
-    /// Returns Ok(()) if connected within timeout, Err if not.
     #[allow(dead_code)]
     pub async fn connect_and_wait(&self, timeout: Duration) -> anyhow::Result<()> {
         self.connect().await;

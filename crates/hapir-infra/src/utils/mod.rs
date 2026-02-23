@@ -5,3 +5,4 @@ pub mod plugin;
 pub mod process;
 pub mod shell;
 pub mod terminal;
+pub mod time;

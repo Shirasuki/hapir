@@ -11,7 +11,6 @@ use hapir_shared::schemas::{HapirSessionMetadata, Session};
 use super::client::{WsClient, WsClientConfig};
 use crate::rpc::RpcRegistry;
 
-/// Session-scoped WebSocket client.
 pub struct WsSessionClient {
     ws: Arc<WsClient>,
     session_id: String,
@@ -49,7 +48,6 @@ impl WsSessionClient {
         }
     }
 
-    /// Start the connection and set up event handlers.
     pub async fn connect(&self) {
         let metadata = self.metadata.clone();
         let metadata_version = self.metadata_version.clone();
@@ -98,8 +96,7 @@ impl WsSessionClient {
             })
             .await;
 
-        // Register initial session-alive as a connect message so it is sent
-        // after all RPC handlers are re-registered on every (re)connect.
+        // session-alive as connect message, sent after RPC re-registration
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -120,7 +117,6 @@ impl WsSessionClient {
         self.ws.connect().await;
     }
 
-    /// Send keep-alive.
     pub async fn keep_alive(
         &self,
         thinking: bool,
@@ -147,7 +143,6 @@ impl WsSessionClient {
             .await;
     }
 
-    /// Send session end.
     pub async fn send_session_end(&self) {
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -164,7 +159,6 @@ impl WsSessionClient {
             .await;
     }
 
-    /// Update metadata with optimistic concurrency.
     pub async fn update_metadata<F>(&self, handler: F) -> anyhow::Result<()>
     where
         F: FnOnce(HapirSessionMetadata) -> HapirSessionMetadata,
@@ -192,7 +186,6 @@ impl WsSessionClient {
         Ok(())
     }
 
-    /// Update agent state with optimistic concurrency.
     pub async fn update_agent_state<F>(&self, handler: F) -> anyhow::Result<()>
     where
         F: FnOnce(Value) -> Value,
@@ -223,7 +216,6 @@ impl WsSessionClient {
         Ok(())
     }
 
-    /// Send a message.
     pub async fn send_message(&self, body: Value) {
         self.ws
             .emit(
@@ -236,7 +228,6 @@ impl WsSessionClient {
             .await;
     }
 
-    /// Send a message delta for streaming.
     pub async fn send_message_delta(&self, message_id: &str, text: &str, is_final: bool) {
         self.ws
             .emit(
@@ -253,7 +244,6 @@ impl WsSessionClient {
             .await;
     }
 
-    /// Register an RPC handler scoped to this session.
     pub async fn register_rpc(
         &self,
         method: &str,
@@ -275,7 +265,6 @@ impl WsSessionClient {
             .await;
     }
 
-    /// Register an event handler.
     pub async fn on(
         &self,
         event: impl Into<String>,
@@ -284,12 +273,10 @@ impl WsSessionClient {
         self.ws.on(event, handler).await;
     }
 
-    /// Send a fire-and-forget event.
     pub async fn emit(&self, event: impl Into<String>, data: Value) {
         self.ws.emit(event, data).await;
     }
 
-    /// Close the session connection.
     pub async fn close(&self) {
         self.ws.close().await;
     }
@@ -330,7 +317,7 @@ impl RpcRegistry for WsSessionClient {
     }
 }
 
-/// Apply a versioned ack response, updating local state.
+/// Apply versioned ack, updating local state.
 async fn apply_versioned_ack<T: serde::de::DeserializeOwned + Clone>(
     ack: &Value,
     value_key: &str,

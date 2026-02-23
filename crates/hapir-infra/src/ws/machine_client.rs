@@ -10,7 +10,6 @@ use tokio::sync::Mutex;
 use super::client::{WsClient, WsClientConfig};
 use crate::rpc::RpcRegistry;
 
-/// Machine-scoped WebSocket client.
 pub struct WsMachineClient {
     ws: Arc<WsClient>,
     machine_id: String,
@@ -81,7 +80,7 @@ impl WsMachineClient {
             })
             .await;
 
-        // Register on_connect callback to resend metadata and runner state on reconnect
+        // Resend on reconnect
         {
             let ws = self.ws.clone();
             let mid = self.machine_id.clone();
@@ -98,7 +97,6 @@ impl WsMachineClient {
                     let rs = rs.clone();
                     let rs_ver = rs_ver.clone();
                     tokio::spawn(async move {
-                        // Resend metadata if we have it
                         if let Some(ref metadata) = *md.lock().await {
                             let version = *md_ver.lock().await;
                             let _ = ws
@@ -112,7 +110,6 @@ impl WsMachineClient {
                                 )
                                 .await;
                         }
-                        // Resend runner state if we have it
                         if let Some(ref state) = *rs.lock().await {
                             let version = *rs_ver.lock().await;
                             let state_value = serde_json::to_value(state).unwrap_or(json!({}));
@@ -134,7 +131,7 @@ impl WsMachineClient {
 
         self.ws.connect_and_wait(timeout).await?;
 
-        // Start keep-alive (every 20 seconds)
+        // Keep-alive every 20s
         let ws = self.ws.clone();
         let mid = self.machine_id.clone();
         let handle = tokio::spawn(async move {
@@ -222,7 +219,6 @@ impl WsMachineClient {
         Ok(())
     }
 
-    /// Register an RPC handler scoped to this machine.
     pub async fn register_rpc(
         &self,
         method: &str,
@@ -243,7 +239,6 @@ impl WsMachineClient {
             .await;
     }
 
-    /// Notify the hub that a session has ended (fire-and-forget).
     pub async fn send_session_end(&self, session_id: &str) {
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

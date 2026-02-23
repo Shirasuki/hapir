@@ -30,10 +30,8 @@ impl SocketOutbox {
             return;
         }
 
-        // Remove expired items
         self.prune_expired();
 
-        // Make room if needed
         while self.queue.len() >= MAX_ITEMS || self.total_bytes + data.len() > MAX_BYTES {
             if let Some(removed) = self.queue.pop_front() {
                 self.total_bytes -= removed.data.len();
