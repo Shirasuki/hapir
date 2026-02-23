@@ -1,10 +1,10 @@
 use super::session_base::{AgentSessionBase, SessionMode};
-use crate::terminal_utils;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tracing::{debug, info};
+use hapir_infra::utils::terminal::{clear_reclaim_prompt, prepare_for_local_agent, restore_after_local_agent, set_logging_suppressed, show_reclaim_prompt, show_reclaiming_prompt};
 
 /// Result of a loop iteration: switch to the other mode, or exit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,9 +61,9 @@ async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
 
         match mode {
             SessionMode::Local => {
-                terminal_utils::prepare_for_local_agent();
+                prepare_for_local_agent();
                 let reason = (opts.run_local)(&session).await;
-                terminal_utils::restore_after_local_agent();
+                restore_after_local_agent();
                 if reason == LoopResult::Exit {
                     return Ok(());
                 }
@@ -76,7 +76,7 @@ async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
                 // Keep logging suppressed so remote launcher output doesn't
                 // pollute the reclaim screen.
                 let keypress_handle = if opts.terminal_reclaim {
-                    terminal_utils::set_logging_suppressed(true);
+                    set_logging_suppressed(true);
                     let notify = session.switch_notify.clone();
                     Some(tokio::spawn(async move {
                         wait_for_reclaim_keypress(&notify).await;
@@ -89,8 +89,8 @@ async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
 
                 if let Some(handle) = keypress_handle {
                     handle.abort();
-                    terminal_utils::set_logging_suppressed(false);
-                    terminal_utils::clear_reclaim_prompt();
+                    set_logging_suppressed(false);
+                    clear_reclaim_prompt();
                 }
 
                 if reason == LoopResult::Exit {
@@ -105,7 +105,9 @@ async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
 
 /// Display a reclaim prompt and wait for the user to press Space.
 async fn wait_for_reclaim_keypress(notify: &Notify) {
-    terminal_utils::show_reclaim_prompt();
+    use tokio::io::AsyncReadExt;
+
+    show_reclaim_prompt();
 
     // Switch stdin to raw mode to capture individual keypresses
     #[cfg(unix)]
@@ -119,7 +121,7 @@ async fn wait_for_reclaim_keypress(notify: &Notify) {
             match stdin.read(&mut buf).await {
                 Ok(1) if buf[0] == b' ' => {
                     info!("[loop] Space pressed, requesting switch to local");
-                    terminal_utils::show_reclaiming_prompt();
+                    show_reclaiming_prompt();
                     notify.notify_one();
                     return;
                 }
