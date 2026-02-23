@@ -560,15 +560,20 @@ fn write_hook_settings(session_id: &str, hook_port: u16, hook_token: &str) -> St
             .unwrap_or_default(),
         session_id
     );
-    let exe_path = std::env::current_exe()
+    let mut exe_path = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "hapir".to_string());
+    // On Windows the path uses backslashes which get eaten by bash as escape
+    // characters. Convert to forward slashes so the hook command works in bash.
+    if cfg!(windows) {
+        exe_path = exe_path.replace('\\', "/");
+    }
     let session_start_cmd = format!(
-        "{} hook-forwarder --port {} --token {}",
+        "{} hook-forwarder --port {} --token {} --endpoint hook/session-start",
         exe_path, hook_port, hook_token
     );
     let event_cmd = format!(
-        "{} hook-forwarder --port {} --token {} --endpoint /hook/event",
+        "{} hook-forwarder --port {} --token {} --endpoint hook/event",
         exe_path, hook_port, hook_token
     );
     let settings_json = serde_json::json!({

@@ -2,7 +2,6 @@ use super::session_base::{AgentSessionBase, SessionMode};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::stdin;
 use tokio::sync::Notify;
 use tracing::{debug, info};
 use hapir_infra::utils::terminal::{clear_reclaim_prompt, prepare_for_local_agent, restore_after_local_agent, set_logging_suppressed, show_reclaim_prompt, show_reclaiming_prompt};
@@ -113,8 +112,10 @@ async fn wait_for_reclaim_keypress(notify: &Notify) {
     // Switch stdin to raw mode to capture individual keypresses
     #[cfg(unix)]
     {
+        use tokio::io::AsyncReadExt;
+
         let _raw_guard = RawModeGuard::enter();
-        let mut stdin = stdin();
+        let mut stdin = tokio::io::stdin();
         let mut buf = [0u8; 1];
         loop {
             match stdin.read(&mut buf).await {
@@ -130,9 +131,79 @@ async fn wait_for_reclaim_keypress(notify: &Notify) {
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // On non-unix, just wait indefinitely (switch via web UI only)
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::{
+            GetConsoleMode, GetStdHandle, ReadConsoleInputW, SetConsoleMode,
+            ENABLE_EXTENDED_FLAGS, ENABLE_WINDOW_INPUT, INPUT_RECORD, KEY_EVENT,
+            STD_INPUT_HANDLE,
+        };
+
+        // Read console input in a blocking thread to avoid blocking the async runtime
+        let pressed = tokio::task::spawn_blocking(|| unsafe {
+            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                return false;
+            }
+
+            // Save original console mode and switch to raw input
+            let mut original_mode: u32 = 0;
+            if GetConsoleMode(handle, &mut original_mode) == 0 {
+                return false;
+            }
+            // Disable line input and echo; enable window input for raw key events
+            let raw_mode = ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT;
+            SetConsoleMode(handle, raw_mode);
+
+            struct ConsoleGuard {
+                handle: *mut core::ffi::c_void,
+                original_mode: u32,
+            }
+            // SAFETY: the handle is valid for the duration of this blocking task
+            unsafe impl Send for ConsoleGuard {}
+            impl Drop for ConsoleGuard {
+                fn drop(&mut self) {
+                    unsafe {
+                        SetConsoleMode(self.handle, self.original_mode);
+                    }
+                }
+            }
+            let _guard = ConsoleGuard {
+                handle,
+                original_mode,
+            };
+
+            let mut record: INPUT_RECORD = std::mem::zeroed();
+            let mut events_read: u32 = 0;
+            loop {
+                if ReadConsoleInputW(handle, &mut record, 1, &mut events_read) == 0 {
+                    return false;
+                }
+                if events_read == 1
+                    && record.EventType as u32 == KEY_EVENT
+                {
+                    let key_event = &record.Event.KeyEvent;
+                    // Only react on key-down of Space (0x20)
+                    if key_event.bKeyDown != 0 && key_event.uChar.UnicodeChar == 0x20 {
+                        return true;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        if pressed {
+            info!("[loop] Space pressed, requesting switch to local");
+            terminal_utils::show_reclaiming_prompt();
+            notify.notify_one();
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        // On other platforms, just wait indefinitely (switch via web UI only)
         std::future::pending::<()>().await;
     }
 }
