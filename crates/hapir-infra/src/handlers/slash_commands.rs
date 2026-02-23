@@ -1,24 +1,35 @@
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use hapir_shared::rpc::skills::RpcListSkillsResponse;
+use hapir_shared::rpc::slash_commands::{
+    RpcListSlashCommandsRequest, RpcListSlashCommandsResponse, RpcSlashCommand,
+};
+use serde_json::Value;
 use tracing::debug;
 
-use super::plugins::get_installed_plugins;
 use crate::rpc::RpcRegistry;
+use crate::utils::plugin::get_claude_installed_plugins;
 
-fn builtin_commands(agent: &str) -> Vec<Value> {
+fn builtin_commands(agent: &str) -> Vec<RpcSlashCommand> {
+    let b = |name: &str, desc: &str| RpcSlashCommand {
+        name: name.into(),
+        description: desc.into(),
+        source: "builtin".into(),
+        content: None,
+        plugin_name: None,
+    };
     match agent {
         "claude" => vec![
-            json!({"name": "clear", "description": "Clear conversation history", "source": "builtin"}),
-            json!({"name": "compact", "description": "Compact conversation context", "source": "builtin"}),
-            json!({"name": "context", "description": "Show context information", "source": "builtin"}),
-            json!({"name": "cost", "description": "Show session cost", "source": "builtin"}),
-            json!({"name": "plan", "description": "Toggle plan mode", "source": "builtin"}),
+            b("clear", "Clear conversation history"),
+            b("compact", "Compact conversation context"),
+            b("context", "Show context information"),
+            b("cost", "Show session cost"),
+            b("plan", "Toggle plan mode"),
         ],
         "gemini" => vec![
-            json!({"name": "about", "description": "About Gemini", "source": "builtin"}),
-            json!({"name": "clear", "description": "Clear conversation", "source": "builtin"}),
-            json!({"name": "compress", "description": "Compress context", "source": "builtin"}),
+            b("about", "About Gemini"),
+            b("clear", "Clear conversation"),
+            b("compress", "Compress context"),
         ],
         _ => vec![],
     }
@@ -69,7 +80,11 @@ fn user_commands_dir(agent: &str) -> Option<PathBuf> {
     }
 }
 
-async fn scan_commands_dir(dir: &Path, source: &str, plugin_name: Option<&str>) -> Vec<Value> {
+async fn scan_commands_dir(
+    dir: &Path,
+    source: &str,
+    plugin_name: Option<&str>,
+) -> Vec<RpcSlashCommand> {
     let mut reader = match tokio::fs::read_dir(dir).await {
         Ok(e) => e,
         Err(_) => return vec![],
@@ -98,42 +113,31 @@ async fn scan_commands_dir(dir: &Path, source: &str, plugin_name: Option<&str>) 
                 "Custom command".to_string()
             }
         });
-        let mut cmd = json!({
-            "name": name,
-            "description": desc,
-            "source": source,
-            "content": body,
+        commands.push(RpcSlashCommand {
+            name,
+            description: desc,
+            source: source.into(),
+            content: Some(body),
+            plugin_name: plugin_name.map(Into::into),
         });
-        if let Some(pn) = plugin_name {
-            cmd["pluginName"] = json!(pn);
-        }
-        commands.push(cmd);
     }
-    commands.sort_by(|a, b| {
-        let an = a["name"].as_str().unwrap_or("");
-        let bn = b["name"].as_str().unwrap_or("");
-        an.cmp(bn)
-    });
+    commands.sort_by(|a, b| a.name.cmp(&b.name));
     commands
 }
 
-async fn scan_plugin_commands(agent: &str) -> Vec<Value> {
+async fn scan_plugin_commands(agent: &str) -> Vec<RpcSlashCommand> {
     if agent != "claude" {
         return vec![];
     }
 
-    let plugins = get_installed_plugins().await;
+    let plugins = get_claude_installed_plugins().await;
     let mut all = vec![];
     for plugin in &plugins {
         let commands_dir = plugin.install_path.join("commands");
         let cmds = scan_commands_dir(&commands_dir, "plugin", Some(&plugin.name)).await;
         all.extend(cmds);
     }
-    all.sort_by(|a, b| {
-        let an = a["name"].as_str().unwrap_or("");
-        let bn = b["name"].as_str().unwrap_or("");
-        an.cmp(bn)
-    });
+    all.sort_by(|a, b| a.name.cmp(&b.name));
     all
 }
 
@@ -142,26 +146,27 @@ pub async fn register_slash_command_handlers(
     _working_directory: &str,
 ) {
     rpc.register("listSlashCommands", move |params: Value| async move {
-        let agent = params
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .unwrap_or("claude")
-            .to_string();
-        debug!("listSlashCommands for agent={}", agent);
+        let mut response = RpcListSlashCommandsResponse::default();
+        let req: RpcListSlashCommandsRequest = serde_json::from_value(params).unwrap_or_default();
+        debug!("listSlashCommands for agent={}", req.agent);
 
-        let builtin = builtin_commands(&agent);
-        let user_dir = user_commands_dir(&agent);
+        let builtin = builtin_commands(&req.agent);
+        let user_dir = user_commands_dir(&req.agent);
         let user_cmds = match user_dir {
             Some(dir) => scan_commands_dir(&dir, "user", None).await,
             None => vec![],
         };
-        let plugin_cmds = scan_plugin_commands(&agent).await;
+        let plugin_cmds = scan_plugin_commands(&req.agent).await;
 
         let mut commands = builtin;
         commands.extend(user_cmds);
         commands.extend(plugin_cmds);
 
-        json!({"success": true, "commands": commands})
+        commands.sort_by(|a, b| a.name.cmp(&b.name));
+
+        response.success = true;
+        response.commands = Some(commands);
+        serde_json::to_value(response).unwrap()
     })
     .await;
 }

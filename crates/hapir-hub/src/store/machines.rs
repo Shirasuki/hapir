@@ -1,10 +1,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::Connection;
-use serde_json::Value;
-
 use super::types::{StoredMachine, VersionedUpdateResult};
 use super::versioned_updates::update_versioned_field;
+use hapir_shared::schemas::HapirMachineMetadata;
+use rusqlite::Connection;
+use serde_json::Value;
 
 fn now_millis() -> i64 {
     SystemTime::now()
@@ -37,7 +37,7 @@ fn row_to_machine(row: &rusqlite::Row) -> rusqlite::Result<StoredMachine> {
 pub fn get_or_create_machine(
     conn: &Connection,
     id: &str,
-    metadata: &Value,
+    metadata: &HapirMachineMetadata,
     runner_state: Option<&Value>,
     namespace: &str,
 ) -> anyhow::Result<StoredMachine> {
@@ -49,17 +49,14 @@ pub fn get_or_create_machine(
             anyhow::bail!("machine namespace mismatch");
         }
         // Update metadata if the caller provided non-empty metadata
-        if metadata.as_object().is_some_and(|o| !o.is_empty()) {
-            let now = now_millis();
-            let metadata_json = serde_json::to_string(metadata)?;
-            conn.execute(
-                "UPDATE machines SET metadata = ?1, updated_at = ?2, seq = seq + 1 WHERE id = ?3",
-                rusqlite::params![metadata_json, now, id],
-            )?;
-            return get_machine(conn, id)
-                .ok_or_else(|| anyhow::anyhow!("failed to reload machine after metadata update"));
-        }
-        return Ok(machine);
+        let now = now_millis();
+        let metadata_json = serde_json::to_string(metadata)?;
+        conn.execute(
+            "UPDATE machines SET metadata = ?1, updated_at = ?2, seq = seq + 1 WHERE id = ?3",
+            rusqlite::params![metadata_json, now, id],
+        )?;
+        return get_machine(conn, id)
+            .ok_or_else(|| anyhow::anyhow!("failed to reload machine after metadata update"));
     }
 
     let now = now_millis();

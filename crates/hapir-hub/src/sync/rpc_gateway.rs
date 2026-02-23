@@ -1,6 +1,14 @@
 use crate::ws::connection_manager::RpcCallError;
 use anyhow::bail;
 use hapir_shared::modes::{ModelMode, PermissionMode};
+use hapir_shared::rpc::bash::RpcCommandResponse;
+use hapir_shared::rpc::directories::{RpcListDirectoryRequest, RpcListDirectoryResponse};
+use hapir_shared::rpc::files::{RpcReadFileRequest, RpcReadFileResponse};
+use hapir_shared::rpc::git::{RpcGitDiffFileRequest, RpcGitDiffNumstatRequest, RpcGitStatusRequest};
+use hapir_shared::rpc::ripgrep::RpcRipgrepRequest;
+use hapir_shared::rpc::uploads::{
+    RpcDeleteUploadRequest, RpcDeleteUploadResponse, RpcUploadFileRequest, RpcUploadFileResponse,
+};
 use hapir_shared::schemas::{AnswersFormat, AttachmentMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,66 +43,6 @@ pub trait RpcTransport: Send + Sync {
     /// (session or machine room). Used to fast-fail RPC calls when no CLI
     /// is connected — polling is pointless if no connection can register a handler.
     fn has_scope_connection(&self, scope: &str) -> Pin<Box<dyn Future<Output = bool> + Send + '_>>;
-}
-
-// --- Response types ---
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RpcCommandResponse {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stdout: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stderr: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RpcReadFileResponse {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RpcUploadFileResponse {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RpcDeleteUploadResponse {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RpcDirectoryEntry {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub entry_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub modified: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RpcListDirectoryResponse {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entries: Option<Vec<RpcDirectoryEntry>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,8 +321,9 @@ impl RpcGateway {
         session_id: &str,
         cwd: Option<&str>,
     ) -> anyhow::Result<RpcCommandResponse> {
+        let req = RpcGitStatusRequest { cwd: cwd.map(Into::into), ..Default::default() };
         let val = self
-            .session_rpc(session_id, "git-status", serde_json::json!({"cwd": cwd}))
+            .session_rpc(session_id, "git-status", serde_json::to_value(req)?)
             .await?;
         Ok(serde_json::from_value(val)?)
     }
@@ -385,12 +334,9 @@ impl RpcGateway {
         cwd: Option<&str>,
         staged: Option<bool>,
     ) -> anyhow::Result<RpcCommandResponse> {
+        let req = RpcGitDiffNumstatRequest { cwd: cwd.map(Into::into), staged, ..Default::default() };
         let val = self
-            .session_rpc(
-                session_id,
-                "git-diff-numstat",
-                serde_json::json!({"cwd": cwd, "staged": staged}),
-            )
+            .session_rpc(session_id, "git-diff-numstat", serde_json::to_value(req)?)
             .await?;
         Ok(serde_json::from_value(val)?)
     }
@@ -402,12 +348,14 @@ impl RpcGateway {
         file_path: &str,
         staged: Option<bool>,
     ) -> anyhow::Result<RpcCommandResponse> {
+        let req = RpcGitDiffFileRequest {
+            cwd: cwd.map(Into::into),
+            file_path: file_path.into(),
+            staged,
+            ..Default::default()
+        };
         let val = self
-            .session_rpc(
-                session_id,
-                "git-diff-file",
-                serde_json::json!({"cwd": cwd, "filePath": file_path, "staged": staged}),
-            )
+            .session_rpc(session_id, "git-diff-file", serde_json::to_value(req)?)
             .await?;
         Ok(serde_json::from_value(val)?)
     }
@@ -419,8 +367,9 @@ impl RpcGateway {
         session_id: &str,
         path: &str,
     ) -> anyhow::Result<RpcReadFileResponse> {
+        let req = RpcReadFileRequest { path: path.into() };
         let val = self
-            .session_rpc(session_id, "readFile", serde_json::json!({"path": path}))
+            .session_rpc(session_id, "readFile", serde_json::to_value(req)?)
             .await?;
         Ok(serde_json::from_value(val)?)
     }
@@ -430,12 +379,9 @@ impl RpcGateway {
         session_id: &str,
         path: &str,
     ) -> anyhow::Result<RpcListDirectoryResponse> {
+        let req = RpcListDirectoryRequest { path: path.into() };
         let val = self
-            .session_rpc(
-                session_id,
-                "listDirectory",
-                serde_json::json!({"path": path}),
-            )
+            .session_rpc(session_id, "listDirectory", serde_json::to_value(req)?)
             .await?;
         Ok(serde_json::from_value(val)?)
     }
@@ -447,9 +393,14 @@ impl RpcGateway {
         content: &str,
         mime_type: &str,
     ) -> anyhow::Result<RpcUploadFileResponse> {
-        let val = self.session_rpc(session_id, "uploadFile", serde_json::json!({
-            "sessionId": session_id, "filename": filename, "content": content, "mimeType": mime_type
-        })).await?;
+        let req = RpcUploadFileRequest {
+            filename: filename.into(),
+            content: content.into(),
+            session_id: session_id.into(),
+        };
+        let val = self
+            .session_rpc(session_id, "uploadFile", serde_json::to_value(req)?)
+            .await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -458,12 +409,12 @@ impl RpcGateway {
         session_id: &str,
         path: &str,
     ) -> anyhow::Result<RpcDeleteUploadResponse> {
+        let req = RpcDeleteUploadRequest {
+            path: path.into(),
+            session_id: session_id.into(),
+        };
         let val = self
-            .session_rpc(
-                session_id,
-                "deleteUpload",
-                serde_json::json!({"sessionId": session_id, "path": path}),
-            )
+            .session_rpc(session_id, "deleteUpload", serde_json::to_value(req)?)
             .await?;
         Ok(serde_json::from_value(val)?)
     }
@@ -474,12 +425,9 @@ impl RpcGateway {
         args: &[String],
         cwd: Option<&str>,
     ) -> anyhow::Result<RpcCommandResponse> {
+        let req = RpcRipgrepRequest { args: args.to_vec(), cwd: cwd.map(Into::into) };
         let val = self
-            .session_rpc(
-                session_id,
-                "ripgrep",
-                serde_json::json!({"args": args, "cwd": cwd}),
-            )
+            .session_rpc(session_id, "ripgrep", serde_json::to_value(req)?)
             .await?;
         Ok(serde_json::from_value(val)?)
     }
@@ -516,8 +464,12 @@ impl RpcGateway {
         .await
     }
 
-    pub async fn list_skills(&self, session_id: &str) -> anyhow::Result<Value> {
-        self.session_rpc(session_id, "listSkills", serde_json::json!({}))
-            .await
+    pub async fn list_skills(&self, session_id: &str, agent: &str) -> anyhow::Result<Value> {
+        self.session_rpc(
+            session_id,
+            "listSkills",
+            serde_json::json!({"agent": agent}),
+        )
+        .await
     }
 }

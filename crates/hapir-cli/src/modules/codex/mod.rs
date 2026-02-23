@@ -6,7 +6,7 @@ use tokio::select;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use hapir_shared::schemas::StartedBy as SharedStartedBy;
+use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
 
 use crate::agent::local_launch_policy::{
     LocalLaunchContext, LocalLaunchExitReason, get_local_launch_exit_reason,
@@ -150,7 +150,7 @@ pub async fn run(
         working_directory, started_by, starting_mode
     );
 
-    let config = Configuration::create()?;
+    let config = Configuration::new()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "codex".to_string(),

@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use hapir_shared::schemas::MachineRunnerState;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
@@ -15,7 +16,7 @@ pub struct WsMachineClient {
     machine_id: String,
     metadata: Arc<Mutex<Option<Value>>>,
     metadata_version: Arc<Mutex<i64>>,
-    runner_state: Arc<Mutex<Option<Value>>>,
+    runner_state: Arc<Mutex<Option<MachineRunnerState>>>,
     runner_state_version: Arc<Mutex<i64>>,
     keep_alive_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
@@ -68,7 +69,11 @@ impl WsMachineClient {
                             data.get("runnerStateVersion").and_then(|v| v.as_i64())
                             && new_ver > *rs_ver.lock().await
                         {
-                            *rs.lock().await = data.get("runnerState").cloned();
+                            if let Some(val) = data.get("runnerState")
+                                && let Ok(parsed) = serde_json::from_value::<MachineRunnerState>(val.clone())
+                            {
+                                *rs.lock().await = Some(parsed);
+                            }
                             *rs_ver.lock().await = new_ver;
                         }
                     }
@@ -110,13 +115,14 @@ impl WsMachineClient {
                         // Resend runner state if we have it
                         if let Some(ref state) = *rs.lock().await {
                             let version = *rs_ver.lock().await;
+                            let state_value = serde_json::to_value(state).unwrap_or(json!({}));
                             let _ = ws
                                 .emit_with_ack(
                                     "machine-update-state",
                                     json!({
                                         "machineId": mid,
                                         "expectedVersion": version,
-                                        "runnerState": state,
+                                        "runnerState": state_value,
                                     }),
                                 )
                                 .await;
@@ -178,10 +184,19 @@ impl WsMachineClient {
 
     pub async fn update_runner_state<F>(&self, handler: F) -> anyhow::Result<()>
     where
-        F: FnOnce(Value) -> Value,
+        F: FnOnce(MachineRunnerState) -> MachineRunnerState,
     {
-        let current = self.runner_state.lock().await.clone().unwrap_or(json!({}));
+        let default = MachineRunnerState {
+            status: hapir_shared::schemas::MachineRunnerStatus::Offline,
+            pid: 0,
+            http_port: 0,
+            started_at: 0,
+            shutdown_requested_at: None,
+            shutdown_source: None,
+        };
+        let current = self.runner_state.lock().await.clone().unwrap_or(default);
         let updated = handler(current);
+        let updated_value = serde_json::to_value(&updated)?;
         let version = *self.runner_state_version.lock().await;
 
         let ack = self
@@ -191,7 +206,7 @@ impl WsMachineClient {
                 json!({
                     "machineId": self.machine_id,
                     "expectedVersion": version,
-                    "runnerState": updated,
+                    "runnerState": updated_value,
                 }),
             )
             .await?;
@@ -199,8 +214,10 @@ impl WsMachineClient {
         if let Some(ver) = ack.get("version").and_then(|v| v.as_i64()) {
             *self.runner_state_version.lock().await = ver;
         }
-        if let Some(val) = ack.get("runnerState") {
-            *self.runner_state.lock().await = Some(val.clone());
+        if let Some(val) = ack.get("runnerState")
+            && let Ok(parsed) = serde_json::from_value::<MachineRunnerState>(val.clone())
+        {
+            *self.runner_state.lock().await = Some(parsed);
         }
         Ok(())
     }

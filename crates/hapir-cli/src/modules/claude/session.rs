@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
 use crate::agent::session_base::{AgentSessionBase, SessionMode};
-use hapir_shared::schemas::StartedBy;
+use hapir_shared::schemas::SessionStartedBy;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tracing::debug;
@@ -21,7 +21,7 @@ pub struct ClaudeSession<Mode: Clone + Send + 'static> {
     pub mcp_servers: HashMap<String, Value>,
     pub allowed_tools: Option<Vec<String>>,
     pub hook_settings_path: String,
-    pub started_by: StartedBy,
+    pub started_by: SessionStartedBy,
     pub starting_mode: SessionMode,
     pub local_launch_failure: Mutex<Option<LocalLaunchFailure>>,
     pub pending_permissions: Arc<Mutex<HashMap<String, PermissionResponseSender>>>,

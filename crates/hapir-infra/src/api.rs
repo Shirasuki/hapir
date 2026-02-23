@@ -6,7 +6,7 @@ use hapir_shared::schemas::cli_api::{
     CreateMachineRequest, CreateMachineResponse, CreateSessionRequest, CreateSessionResponse,
     ListMessagesResponse,
 };
-use hapir_shared::schemas::{Metadata, Session};
+use hapir_shared::schemas::{HapirSessionMetadata, Session, MachineRunnerState, HapirMachineMetadata};
 
 use crate::config::Configuration;
 
@@ -44,7 +44,7 @@ impl ApiClient {
     pub async fn get_or_create_session(
         &self,
         tag: &str,
-        metadata: &Metadata,
+        metadata: &HapirSessionMetadata,
         agent_state: Option<&serde_json::Value>,
     ) -> Result<Session> {
         let body = CreateSessionRequest {
@@ -77,8 +77,8 @@ impl ApiClient {
     pub async fn get_or_create_machine(
         &self,
         machine_id: &str,
-        metadata: &serde_json::Value,
-        runner_state: Option<&serde_json::Value>,
+        metadata: &HapirMachineMetadata,
+        runner_state: Option<&MachineRunnerState>,
     ) -> Result<serde_json::Value> {
         let body = CreateMachineRequest {
             id: machine_id.to_string(),

@@ -4,7 +4,7 @@ use hapir_infra::config::Configuration;
 use hapir_infra::persistence;
 
 pub fn run(action: Option<&str>) -> anyhow::Result<()> {
-    let config = Configuration::create()?;
+    let config = Configuration::new()?;
 
     match action {
         Some("status") => show_status(&config),

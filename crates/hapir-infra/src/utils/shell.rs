@@ -1,43 +1,48 @@
-use std::collections::HashMap;
-
-/// Env var keys that should be filtered out when spawning child processes.
-const SENSITIVE_ENV_KEYS: &[&str] = &[
-    "CLI_API_TOKEN",
-    "HAPIR_API_URL",
-    "HAPIR_HTTP_MCP_URL",
-    "TELEGRAM_BOT_TOKEN",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-];
-
-/// Return the list of sensitive environment variable keys.
-pub fn sensitive_env_keys() -> &'static [&'static str] {
-    SENSITIVE_ENV_KEYS
-}
-
-/// Resolve the default shell for the current platform.
+/// Returns the default shell for the current platform.
 ///
-/// Checks `$SHELL` first, then falls back to `/bin/zsh` on macOS
-/// or `/bin/bash` elsewhere.
+/// Unix: `$SHELL` → `/bin/zsh` (macOS) → `/bin/bash`
+/// Windows: `$COMSPEC` → `powershell.exe`
 pub fn default_shell() -> String {
-    if let Ok(shell) = std::env::var("SHELL")
-        && !shell.is_empty()
+    #[cfg(unix)]
     {
-        return shell;
+        if let Ok(shell) = std::env::var("SHELL")
+            && !shell.is_empty()
+        {
+            return shell;
+        }
+        if cfg!(target_os = "macos") {
+            "/bin/zsh".to_string()
+        } else {
+            "/bin/bash".to_string()
+        }
     }
-
-    if cfg!(target_os = "macos") {
-        "/bin/zsh".to_string()
-    } else {
-        "/bin/bash".to_string()
+    #[cfg(windows)]
+    {
+        if let Ok(shell) = std::env::var("COMSPEC")
+            && !shell.is_empty()
+        {
+            return shell;
+        }
+        "powershell.exe".to_string()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        "/bin/sh".to_string()
     }
 }
 
-/// Return the current environment with sensitive keys removed.
-pub fn filtered_env() -> HashMap<String, String> {
-    std::env::vars()
-        .filter(|(key, _)| !SENSITIVE_ENV_KEYS.contains(&key.as_str()))
-        .collect()
+/// Returns the flag used to pass a command string to the shell.
+///
+/// Unix shells use `-c`, `cmd.exe` uses `/C`, PowerShell uses `-Command`.
+pub fn shell_command_flag(shell: &str) -> &'static str {
+    let base = shell.rsplit(['/', '\\']).next().unwrap_or(shell);
+    if base.eq_ignore_ascii_case("cmd.exe") || base.eq_ignore_ascii_case("cmd") {
+        "/C"
+    } else if base.to_ascii_lowercase().contains("powershell")
+        || base.to_ascii_lowercase().contains("pwsh")
+    {
+        "-Command"
+    } else {
+        "-c"
+    }
 }

@@ -1,22 +1,22 @@
 use axum::{
-    Extension, Json, Router,
-    extract::{Path, State},
-    http::StatusCode,
-    routing::{delete, get, patch, post},
+    extract::{Path, State}, http::StatusCode, routing::{delete, get, patch, post},
+    Extension,
+    Json,
+    Router,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::cmp::Ordering;
 
 use hapir_shared::modes::{
-    AgentFlavor, ModelMode, PermissionMode, is_model_mode_allowed_for_flavor,
-    is_permission_mode_allowed_for_flavor, permission_modes_for_flavor,
+    is_model_mode_allowed_for_flavor, is_permission_mode_allowed_for_flavor, permission_modes_for_flavor, AgentFlavor,
+    ModelMode, PermissionMode,
 };
 use hapir_shared::session_summary::to_session_summary;
 
 use crate::sync::{ResumeSessionErrorCode, ResumeSessionResult};
-use crate::web::AppState;
 use crate::web::middleware::auth::AuthContext;
+use crate::web::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -608,7 +608,7 @@ async fn list_skills(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let (session_id, _session) = match state
+    let (session_id, session) = match state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
         .await
@@ -628,7 +628,14 @@ async fn list_skills(
         }
     };
 
-    match state.sync_engine.list_skills(&session_id).await {
+    let agent = session
+        .metadata
+        .as_ref()
+        .and_then(|m| m.flavor.as_deref())
+        .unwrap_or("claude")
+        .to_string();
+
+    match state.sync_engine.list_skills(&session_id, &agent).await {
         Ok(val) => (StatusCode::OK, Json(val)),
         Err(e) => (
             StatusCode::OK,

@@ -4,20 +4,18 @@ use std::sync::Arc;
 
 use tracing::debug;
 
-use hapir_shared::schemas::{Metadata, Session, StartedBy};
+use hapir_shared::schemas::{HapirSessionMetadata, Session, SessionStartedBy};
 
 use hapir_infra::api::ApiClient;
 use hapir_infra::config::Configuration;
-use hapir_infra::machine::{build_machine_metadata, gethostname};
 use hapir_infra::persistence;
+use hapir_infra::utils::machine::{build_machine_metadata, gethostname};
 use hapir_infra::ws::session_client::WsSessionClient;
-
-pub use hapir_infra::machine::MachineMetadata;
 
 /// Options for bootstrapping a session.
 pub struct SessionBootstrapOptions {
     pub flavor: String,
-    pub started_by: Option<StartedBy>,
+    pub started_by: Option<SessionStartedBy>,
     pub working_directory: Option<String>,
     pub tag: Option<String>,
     pub agent_state: Option<serde_json::Value>,
@@ -28,20 +26,20 @@ pub struct SessionBootstrapResult {
     pub api: Arc<ApiClient>,
     pub ws_client: Arc<WsSessionClient>,
     pub session_info: Session,
-    pub metadata: Metadata,
+    pub metadata: HapirSessionMetadata,
     pub machine_id: String,
-    pub started_by: StartedBy,
+    pub started_by: SessionStartedBy,
     pub working_directory: String,
 }
 
 /// Build session metadata for a new session.
 pub fn build_session_metadata(
     flavor: &str,
-    started_by: StartedBy,
+    started_by: SessionStartedBy,
     working_directory: &str,
     machine_id: &str,
     config: &Configuration,
-) -> Metadata {
+) -> HapirSessionMetadata {
     let hostname = gethostname().to_string_lossy().to_string();
     let home_dir = dirs_next::home_dir()
         .map(|p| p.to_string_lossy().to_string())
@@ -58,7 +56,7 @@ pub fn build_session_metadata(
         .unwrap_or_default()
         .as_millis() as f64;
 
-    Metadata {
+    HapirSessionMetadata {
         path: working_directory.to_string(),
         host: hostname,
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -76,7 +74,7 @@ pub fn build_session_metadata(
         happy_home_dir: Some(happy_home_dir),
         happy_lib_dir: Some(happy_lib_dir),
         happy_tools_dir: Some(happy_tools_dir),
-        started_from_runner: Some(started_by == StartedBy::Runner),
+        started_from_runner: Some(started_by == SessionStartedBy::Runner),
         host_pid: Some(std::process::id() as f64),
         started_by: Some(started_by),
         lifecycle_state: Some("running".to_string()),
@@ -109,7 +107,7 @@ pub async fn bootstrap_session(
             .to_string_lossy()
             .to_string()
     });
-    let started_by = opts.started_by.unwrap_or(StartedBy::Terminal);
+    let started_by = opts.started_by.unwrap_or(SessionStartedBy::Terminal);
     let session_tag = opts.tag.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let agent_state = opts.agent_state;
 
@@ -118,8 +116,8 @@ pub async fn bootstrap_session(
     let machine_id = get_machine_id(config)?;
     debug!("Using machineId: {machine_id}");
 
-    let machine_meta = build_machine_metadata(config);
-    api.get_or_create_machine(&machine_id, &serde_json::to_value(&machine_meta)?, None)
+    let machine_meta = build_machine_metadata(&config.home_dir);
+    api.get_or_create_machine(&machine_id, &machine_meta, None)
         .await?;
 
     let metadata = build_session_metadata(
@@ -140,7 +138,7 @@ pub async fn bootstrap_session(
         &session_info,
     ));
 
-    hapir_infra::handlers::register_all_handlers(ws_client.as_ref(), &working_directory).await;
+    hapir_infra::handlers::register_infra_handlers(ws_client.as_ref(), &working_directory).await;
 
     Ok(SessionBootstrapResult {
         api,

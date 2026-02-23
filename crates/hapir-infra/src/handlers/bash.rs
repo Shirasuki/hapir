@@ -1,43 +1,47 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
+use tokio::process::Command;
 use tracing::debug;
 
-use crate::rpc::RpcRegistry;
+use hapir_shared::rpc::bash::{RpcBashRequest, RpcCommandResponse};
 
-use super::path_security::validate_path;
+use crate::rpc::RpcRegistry;
+use crate::utils::path::validate_path;
+use crate::utils::shell::{default_shell, shell_command_flag};
 
 pub async fn register_bash_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
-    let wd = Arc::new(working_directory.to_string());
+    let wd = working_directory.to_string();
 
     rpc.register("bash", move |params: Value| {
         let wd = wd.clone();
         async move {
-            let command = match params.get("command").and_then(|v| v.as_str()) {
-                Some(c) => c.to_string(),
-                None => return json!({"success": false, "error": "Missing 'command' field"}),
+            let mut response = RpcCommandResponse::default();
+
+            let req: RpcBashRequest = match serde_json::from_value(params) {
+                Ok(r) => r,
+                Err(_) => {
+                    response.error = Some("Missing 'command' field".into());
+                    return serde_json::to_value(response).unwrap();
+                }
             };
 
-            let cwd_override = params.get("cwd").and_then(|v| v.as_str()).map(String::from);
-            let timeout_ms = params
-                .get("timeout")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(30_000);
+            let timeout_ms = req.timeout.unwrap_or(30_000);
 
-            if let Some(ref cwd) = cwd_override
+            if let Some(ref cwd) = req.cwd
                 && let Err(e) = validate_path(cwd, &wd)
             {
-                return json!({"success": false, "error": e});
+                response.error = Some(e);
+                return serde_json::to_value(response).unwrap();
             }
 
-            let cwd = cwd_override.unwrap_or_else(|| wd.to_string());
+            let cwd = req.cwd.unwrap_or_else(|| wd.to_string());
 
-            debug!(command = %command, cwd = %cwd, "bash handler");
+            debug!(command = %req.command, cwd = %cwd, "bash handler");
 
             let result = tokio::time::timeout(
                 Duration::from_millis(timeout_ms),
-                run_command(&command, &cwd),
+                run_command(&req.command, &cwd),
             )
             .await;
 
@@ -46,18 +50,27 @@ pub async fn register_bash_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
                     let code = output.status.code().unwrap_or(1);
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    json!({
-                        "success": output.status.success(),
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exitCode": code
-                    })
+                    response.success = output.status.success();
+                    response.stdout = Some(stdout.clone());
+                    response.stderr = Some(stderr.clone());
+                    response.exit_code = Some(code);
+                    serde_json::to_value(response).unwrap()
                 }
                 Ok(Err(e)) => {
-                    json!({"success": false, "error": e.to_string(), "stdout": "", "stderr": e.to_string(), "exitCode": 1})
+                    response.success = false;
+                    response.stdout = Some(String::new());
+                    response.stderr = Some(e.to_string());
+                    response.exit_code = Some(1);
+                    response.error = Some(e.to_string());
+                    serde_json::to_value(response).unwrap()
                 }
                 Err(_) => {
-                    json!({"success": false, "error": "Command timed out", "stdout": "", "stderr": "", "exitCode": -1})
+                    response.success = false;
+                    response.stdout = Some(String::new());
+                    response.stderr = Some(String::new());
+                    response.exit_code = Some(-1);
+                    response.error = Some("Command timed out".into());
+                    serde_json::to_value(response).unwrap()
                 }
             }
         }
@@ -66,8 +79,10 @@ pub async fn register_bash_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
 }
 
 async fn run_command(command: &str, cwd: &str) -> std::io::Result<std::process::Output> {
-    tokio::process::Command::new("sh")
-        .arg("-c")
+    let shell = default_shell();
+    let flag = shell_command_flag(&shell);
+    Command::new(&shell)
+        .arg(flag)
         .arg(command)
         .current_dir(cwd)
         .output()

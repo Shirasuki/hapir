@@ -6,14 +6,14 @@ export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "
 export type ModelMode = "default" | "sonnet" | "opus";
 export type AgentFlavor = "claude" | "codex" | "gemini" | "opencode";
 export type PermissionModeTone = "neutral" | "info" | "warning" | "danger";
-export type MetadataSummary = { text: string, updatedAt: number, };
-export type WorktreeMetadata = { basePath: string, branch: string, name: string, worktreePath: string | null, createdAt: number | null, };
-export type Metadata = { path: string, host: string, version: string | null, name: string | null, os: string | null, summary: MetadataSummary | null, machineId: string | null, claudeSessionId: string | null, codexSessionId: string | null, geminiSessionId: string | null, opencodeSessionId: string | null, tools: Array<string> | null, slashCommands: Array<string> | null, homeDir: string | null, happyHomeDir: string | null, happyLibDir: string | null, happyToolsDir: string | null, startedFromRunner: boolean | null, hostPid: number | null, startedBy: StartedBy | null, lifecycleState: string | null, lifecycleStateSince: number | null, archivedBy: string | null, archiveReason: string | null, 
+export type SessionMetadataSummary = { text: string, updatedAt: number, };
+export type SessionWorktreeMetadata = { basePath: string, branch: string, name: string, worktreePath: string | null, createdAt: number | null, };
+export type HapirSessionMetadata = { path: string, host: string, version: string | null, name: string | null, os: string | null, summary: SessionMetadataSummary | null, machineId: string | null, claudeSessionId: string | null, codexSessionId: string | null, geminiSessionId: string | null, opencodeSessionId: string | null, tools: Array<string> | null, slashCommands: Array<string> | null, homeDir: string | null, happyHomeDir: string | null, happyLibDir: string | null, happyToolsDir: string | null, startedFromRunner: boolean | null, hostPid: number | null, startedBy: SessionStartedBy | null, lifecycleState: string | null, lifecycleStateSince: number | null, archivedBy: string | null, archiveReason: string | null, 
 /**
  * Can be null or absent
  */
-flavor?: string | null, worktree: WorktreeMetadata | null, };
-export type StartedBy = "runner" | "terminal";
+flavor?: string | null, worktree: SessionWorktreeMetadata | null, };
+export type SessionStartedBy = "runner" | "terminal";
 export type AgentStateRequest = { tool: string, arguments: JsonValue, createdAt?: number | null, };
 export type CompletedRequestStatus = "canceled" | "denied" | "approved";
 export type PermissionDecision = "approved" | "approved_for_session" | "denied" | "abort";
@@ -26,12 +26,12 @@ export type TodoPriority = "high" | "medium" | "low";
 export type TodoItem = { content: string, status: TodoStatus, priority: TodoPriority, id: string, };
 export type AttachmentMetadata = { id: string, filename: string, mimeType: string, size: number, path: string, previewUrl: string | null, };
 export type DecryptedMessage = { id: string, seq: number | null, localId: string | null, content: JsonValue, createdAt: number, };
-export type Session = { id: string, namespace: string, seq: number, createdAt: number, updatedAt: number, active: boolean, activeAt: number, metadata: Metadata | null, metadataVersion: number, agentState: AgentState | null, agentStateVersion: number, thinking: boolean, thinkingAt: number, thinkingStatus: string | null, todos: Array<TodoItem> | null, permissionMode: PermissionMode | null, modelMode: ModelMode | null, };
+export type Session = { id: string, namespace: string, seq: number, createdAt: number, updatedAt: number, active: boolean, activeAt: number, metadata: HapirSessionMetadata | null, metadataVersion: number, agentState: AgentState | null, agentStateVersion: number, thinking: boolean, thinkingAt: number, thinkingStatus: string | null, todos: Array<TodoItem> | null, permissionMode: PermissionMode | null, modelMode: ModelMode | null, };
 export type SyncEvent = { "type": "session-added", sessionId: string, namespace: string | null, data: JsonValue | null, } | { "type": "session-updated", sessionId: string, namespace: string | null, data: JsonValue | null, } | { "type": "session-removed", sessionId: string, namespace: string | null, } | { "type": "message-received", sessionId: string, namespace: string | null, message: DecryptedMessage, } | { "type": "message-delta", sessionId: string, namespace: string | null, delta: MessageDeltaData, } | { "type": "machine-updated", machineId: string, namespace: string | null, data: JsonValue | null, } | { "type": "toast", namespace: string | null, data: ToastData, } | { "type": "connection-changed", namespace: string | null, data: ConnectionChangedData | null, };
 export type ToastData = { title: string, body: string, sessionId: string, url: string, };
 export type ConnectionChangedData = { status: string, subscriptionId: string | null, };
 export type MessageDeltaData = { messageId: string, localId: string | null, text: string, isFinal: boolean, seq: number | null, };
 export type SummaryText = { text: string, };
 export type TodoProgress = { completed: number, total: number, };
-export type SessionSummaryMetadata = { name: string | null, path: string, machineId: string | null, summary: SummaryText | null, flavor?: string | null, worktree: WorktreeMetadata | null, };
+export type SessionSummaryMetadata = { name: string | null, path: string, machineId: string | null, summary: SummaryText | null, flavor?: string | null, worktree: SessionWorktreeMetadata | null, };
 export type SessionSummary = { id: string, active: boolean, thinking: boolean, activeAt: number, updatedAt: number, metadata: SessionSummaryMetadata | null, todoProgress: TodoProgress | null, pendingRequestsCount: number, modelMode: ModelMode | null, };

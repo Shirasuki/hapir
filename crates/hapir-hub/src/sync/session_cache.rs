@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hapir_shared::modes::{ModelMode, PermissionMode};
-use hapir_shared::schemas::{AgentState, Metadata, Session, SyncEvent, TodoItem};
+use hapir_shared::schemas::{AgentState, HapirSessionMetadata, Session, SyncEvent, TodoItem};
 use serde_json::Value;
 
 use super::alive_time::clamp_alive_time;
@@ -154,7 +154,7 @@ impl SessionCache {
         }
 
         // Parse metadata
-        let metadata: Option<Metadata> = stored
+        let metadata: Option<HapirSessionMetadata> = stored
             .metadata
             .as_ref()
             .and_then(|v| serde_json::from_value(v.clone()).ok());
@@ -400,7 +400,7 @@ impl SessionCache {
             .get(session_id)
             .ok_or_else(|| anyhow::anyhow!("session not found"))?;
 
-        let current_meta = session.metadata.clone().unwrap_or_else(|| Metadata {
+        let current_meta = session.metadata.clone().unwrap_or_else(|| HapirSessionMetadata {
             path: String::new(),
             host: String::new(),
             version: None,

@@ -1,19 +1,19 @@
+use crate::control_server;
+use crate::types::ShutdownSource;
 use control_server::RunnerState;
 use hapir_infra::auth;
 use hapir_infra::config::Configuration;
 use hapir_infra::handlers;
-use hapir_infra::machine::build_machine_metadata;
 use hapir_infra::persistence;
-use hapir_infra::process::spawn_runner_background;
+use hapir_infra::utils::machine::build_machine_metadata;
 use hapir_infra::ws::machine_client::WsMachineClient;
+use hapir_shared::schemas::{MachineRunnerState, MachineRunnerStatus};
 use serde_json::json;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
-
-use crate::control_server;
-use crate::types::ShutdownSource;
+use hapir_infra::utils::process::spawn_runner_background;
 
 /// Get the mtime of the current CLI executable in milliseconds.
 pub fn get_cli_mtime_ms() -> Option<i64> {
@@ -225,12 +225,12 @@ pub async fn start_sync(config: &Configuration) -> anyhow::Result<()> {
 
     if let Some(ws) = ws_holder.get() {
         let shutdown_at = epoch_ms();
-        let source_str = shutdown_source.as_str();
+        let source_str = shutdown_source.as_str().to_string();
         if let Err(e) = ws
             .update_runner_state(|mut s| {
-                s["status"] = json!("shutting-down");
-                s["shutdownRequestedAt"] = json!(shutdown_at);
-                s["shutdownSource"] = json!(source_str);
+                s.status = MachineRunnerStatus::ShuttingDown;
+                s.shutdown_requested_at = Some(shutdown_at);
+                s.shutdown_source = Some(source_str);
                 s
             })
             .await
@@ -273,12 +273,14 @@ async fn connect_to_hub(
     start_time_ms: i64,
     runner_state: &RunnerState,
 ) -> anyhow::Result<Arc<WsMachineClient>> {
-    let initial_runner_state = json!({
-        "status": "offline",
-        "pid": std::process::id(),
-        "httpPort": http_port,
-        "startedAt": start_time_ms,
-    });
+    let initial_runner_state = MachineRunnerState {
+        status: MachineRunnerStatus::Offline,
+        pid: std::process::id(),
+        http_port,
+        started_at: start_time_ms,
+        shutdown_requested_at: None,
+        shutdown_source: None,
+    };
 
     let machine_id = {
         let max_attempts: u32 = 60;
@@ -431,24 +433,23 @@ async fn connect_to_hub(
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "/".to_string());
-        handlers::register_all_handlers(ws.as_ref(), &cwd).await;
+        handlers::register_infra_handlers(ws.as_ref(), &cwd).await;
     }
 
     ws.connect_and_wait(Duration::from_secs(10)).await?;
 
-    let meta = build_machine_metadata(config);
+    let meta = build_machine_metadata(&config.home_dir);
     ws.update_metadata(|_| serde_json::to_value(&meta).unwrap_or(json!({})))
         .await
         .map_err(|e| warn!("failed to send machine metadata: {e}"))
         .ok();
 
-    ws.update_runner_state(|_| {
-        json!({
-            "status": "running",
-            "pid": std::process::id(),
-            "httpPort": http_port,
-            "startedAt": start_time_ms,
-        })
+    ws.update_runner_state(|mut s| {
+        s.status = MachineRunnerStatus::Running;
+        s.pid = std::process::id();
+        s.http_port = http_port;
+        s.started_at = start_time_ms;
+        s
     })
     .await
     .map_err(|e| warn!("failed to send runner state: {e}"))

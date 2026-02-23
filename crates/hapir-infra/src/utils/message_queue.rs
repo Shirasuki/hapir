@@ -64,23 +64,6 @@ impl<T: Clone + Send + 'static> MessageQueue2<T> {
         self.notify.notify_one();
     }
 
-    /// Push a message and wake the waiter immediately.
-    pub async fn push_immediate(&self, message: String, mode: T) {
-        let mut inner = self.inner.lock().await;
-        if inner.closed {
-            return;
-        }
-        let mode_hash = (inner.mode_hasher)(&mode);
-        inner.queue.push_back(QueueItem {
-            message,
-            mode,
-            mode_hash,
-            isolate: false,
-        });
-        drop(inner);
-        self.notify.notify_one();
-    }
-
     /// Clear the queue, then push a single isolated message.
     pub async fn push_isolate_and_clear(&self, message: String, mode: T) {
         let mut inner = self.inner.lock().await;
@@ -147,6 +130,7 @@ impl<T: Clone + Send + 'static> MessageQueue2<T> {
     /// remaining messages.
     pub async fn wait_for_messages(&self) -> Option<BatchResult<T>> {
         loop {
+            let notified = self.notify.notified();
             {
                 let mut inner = self.inner.lock().await;
                 if let Some(batch) = Self::collect_batch(&mut inner.queue) {
@@ -156,8 +140,7 @@ impl<T: Clone + Send + 'static> MessageQueue2<T> {
                     return None;
                 }
             }
-            // Wait until notified, then re-check.
-            self.notify.notified().await;
+            notified.await;
         }
     }
 

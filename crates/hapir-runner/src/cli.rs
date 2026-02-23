@@ -1,15 +1,12 @@
 use anyhow::bail;
 use hapir_infra::config::Configuration;
 use hapir_infra::persistence;
-use hapir_infra::process::spawn_runner_background;
-
+use hapir_infra::utils::process::spawn_runner_background;
 use crate::control_client;
 use crate::orchestrator;
 
 pub async fn run(action: Option<&str>) -> anyhow::Result<()> {
-    let mut config = Configuration::create()?;
-    config.load_with_settings()?;
-
+    let config = Configuration::new()?;
     match action {
         Some("start") => start_background(&config).await,
         Some("start-sync") => orchestrator::start_sync(&config).await,

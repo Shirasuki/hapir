@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
 
-use hapir_shared::schemas::StartedBy;
+use hapir_shared::schemas::SessionStartedBy;
 
 use crate::agent::local_launch_policy::{
     LocalLaunchContext, LocalLaunchExitReason, get_local_launch_exit_reason,
@@ -231,11 +231,11 @@ async fn opencode_remote_launcher(
 pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::Result<()> {
     debug!("[runOpenCode] Starting in {}", working_directory);
 
-    let config = Configuration::create()?;
+    let config = Configuration::new()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "opencode".to_string(),
-            started_by: Some(StartedBy::Terminal),
+            started_by: Some(SessionStartedBy::Terminal),
             working_directory: Some(working_directory.to_string()),
             tag: None,
             agent_state: Some(serde_json::json!({

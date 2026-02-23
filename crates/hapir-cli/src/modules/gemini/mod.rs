@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
 
-use hapir_shared::schemas::StartedBy as SharedStartedBy;
+use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
 
 use crate::agent::local_launch_policy::{
     LocalLaunchContext, LocalLaunchExitReason, get_local_launch_exit_reason,
@@ -115,7 +115,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
         working_directory, started_by, starting_mode
     );
 
-    let config = Configuration::create()?;
+    let config = Configuration::new()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "gemini".to_string(),

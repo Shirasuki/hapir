@@ -1,5 +1,6 @@
 pub mod agent_state;
 pub mod cli_api;
+pub mod machine;
 pub mod message;
 pub mod metadata;
 pub mod session;
@@ -7,6 +8,7 @@ pub mod sync_event;
 pub mod todo;
 
 pub use agent_state::*;
+pub use machine::*;
 pub use message::*;
 pub use metadata::*;
 pub use session::*;
@@ -20,7 +22,7 @@ mod tests {
 
     #[test]
     fn metadata_serde_roundtrip() {
-        let meta = Metadata {
+        let meta = HapirSessionMetadata {
             path: "/home/user/project".into(),
             host: "myhost".into(),
             version: Some("1.0.0".into()),
@@ -40,7 +42,7 @@ mod tests {
             happy_tools_dir: None,
             started_from_runner: Some(true),
             host_pid: Some(1234.0),
-            started_by: Some(StartedBy::Runner),
+            started_by: Some(SessionStartedBy::Runner),
             lifecycle_state: None,
             lifecycle_state_since: None,
             archived_by: None,
@@ -49,7 +51,7 @@ mod tests {
             worktree: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
-        let back: Metadata = serde_json::from_str(&json).unwrap();
+        let back: HapirSessionMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(meta, back);
     }
 

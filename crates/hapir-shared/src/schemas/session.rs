@@ -6,7 +6,7 @@ use ts_rs::TS;
 use crate::modes::{ModelMode, PermissionMode};
 
 use super::agent_state::AgentState;
-use super::metadata::Metadata;
+use super::metadata::HapirSessionMetadata;
 use super::todo::TodoItem;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
@@ -21,7 +21,7 @@ pub struct Session {
     pub updated_at: f64,
     pub active: bool,
     pub active_at: f64,
-    pub metadata: Option<Metadata>,
+    pub metadata: Option<HapirSessionMetadata>,
     pub metadata_version: f64,
     pub agent_state: Option<AgentState>,
     pub agent_state_version: f64,

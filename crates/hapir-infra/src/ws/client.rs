@@ -1,11 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
-use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tokio::time;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
@@ -135,7 +135,7 @@ impl WsClient {
     pub async fn register_rpc(
         &self,
         method: impl Into<String>,
-        handler: impl Fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send>>
+        handler: impl Fn(Value) -> std::pin::Pin<Box<dyn Future<Output = Value> + Send>>
         + Send
         + Sync
         + 'static,

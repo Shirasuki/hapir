@@ -16,7 +16,7 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
 
     check_claude_version()?;
 
-    let mut config = Configuration::create()?;
+    let mut config = Configuration::new()?;
 
     // Map --yolo / --dangerously-skip-permissions to permission mode
     let permission_mode = if args.dangerously_skip_permissions {

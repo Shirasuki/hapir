@@ -64,26 +64,7 @@ fn resolve_env_number(name: &str, fallback: u64) -> u64 {
 }
 
 fn resolve_shell() -> String {
-    // Unix: prefer $SHELL
-    #[cfg(unix)]
-    {
-        if let Ok(shell) = std::env::var("SHELL")
-            && !shell.is_empty()
-        {
-            return shell;
-        }
-        "/bin/bash".to_string()
-    }
-    // Windows: prefer $COMSPEC (usually cmd.exe), fall back to powershell
-    #[cfg(windows)]
-    {
-        if let Ok(shell) = std::env::var("COMSPEC")
-            && !shell.is_empty()
-        {
-            return shell;
-        }
-        "powershell.exe".to_string()
-    }
+    hapir_infra::utils::shell::default_shell()
 }
 
 fn build_filtered_env() -> Vec<(String, String)> {

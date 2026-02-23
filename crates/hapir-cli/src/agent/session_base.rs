@@ -35,7 +35,7 @@ pub type ModeChangeCallback = Box<dyn Fn(SessionMode) + Send + Sync>;
 
 /// Applies a session ID to metadata (flavor-specific).
 pub type ApplySessionIdFn = Box<
-    dyn Fn(hapir_shared::schemas::Metadata, &str) -> hapir_shared::schemas::Metadata + Send + Sync,
+    dyn Fn(hapir_shared::schemas::HapirSessionMetadata, &str) -> hapir_shared::schemas::HapirSessionMetadata + Send + Sync,
 >;
 
 /// Options for constructing an AgentSessionBase.

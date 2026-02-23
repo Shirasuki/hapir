@@ -13,7 +13,11 @@ use std::sync::Arc;
 use crate::store::Store;
 use event_publisher::EventPublisher;
 use hapir_shared::modes::{ModelMode, PermissionMode};
-use hapir_shared::schemas::{AttachmentMetadata, DecryptedMessage, Session, SyncEvent};
+use hapir_shared::rpc::bash::RpcCommandResponse;
+use hapir_shared::rpc::directories::RpcListDirectoryResponse;
+use hapir_shared::rpc::files::RpcReadFileResponse;
+use hapir_shared::rpc::uploads::{RpcDeleteUploadResponse, RpcUploadFileResponse};
+use hapir_shared::schemas::{AttachmentMetadata, DecryptedMessage, HapirMachineMetadata, Session, SyncEvent};
 use machine_cache::{Machine, MachineCache};
 use message_service::{MessageService, MessagesPageResult};
 use rpc_gateway::{RpcGateway, RpcTransport};
@@ -243,7 +247,7 @@ impl SyncEngine {
     pub async fn get_or_create_machine(
         &self,
         id: &str,
-        metadata: &Value,
+        metadata: &HapirMachineMetadata,
         runner_state: Option<&Value>,
         namespace: &str,
     ) -> anyhow::Result<Machine> {
@@ -547,7 +551,7 @@ impl SyncEngine {
         &self,
         session_id: &str,
         cwd: Option<&str>,
-    ) -> anyhow::Result<rpc_gateway::RpcCommandResponse> {
+    ) -> anyhow::Result<RpcCommandResponse> {
         self.rpc_gateway.get_git_status(session_id, cwd).await
     }
 
@@ -556,7 +560,7 @@ impl SyncEngine {
         session_id: &str,
         cwd: Option<&str>,
         staged: Option<bool>,
-    ) -> anyhow::Result<rpc_gateway::RpcCommandResponse> {
+    ) -> anyhow::Result<RpcCommandResponse> {
         self.rpc_gateway
             .get_git_diff_numstat(session_id, cwd, staged)
             .await
@@ -568,7 +572,7 @@ impl SyncEngine {
         cwd: Option<&str>,
         file_path: &str,
         staged: Option<bool>,
-    ) -> anyhow::Result<rpc_gateway::RpcCommandResponse> {
+    ) -> anyhow::Result<RpcCommandResponse> {
         self.rpc_gateway
             .get_git_diff_file(session_id, cwd, file_path, staged)
             .await
@@ -578,7 +582,7 @@ impl SyncEngine {
         &self,
         session_id: &str,
         path: &str,
-    ) -> anyhow::Result<rpc_gateway::RpcReadFileResponse> {
+    ) -> anyhow::Result<RpcReadFileResponse> {
         self.rpc_gateway.read_session_file(session_id, path).await
     }
 
@@ -586,7 +590,7 @@ impl SyncEngine {
         &self,
         session_id: &str,
         path: &str,
-    ) -> anyhow::Result<rpc_gateway::RpcListDirectoryResponse> {
+    ) -> anyhow::Result<RpcListDirectoryResponse> {
         self.rpc_gateway.list_directory(session_id, path).await
     }
 
@@ -596,7 +600,7 @@ impl SyncEngine {
         filename: &str,
         content: &str,
         mime_type: &str,
-    ) -> anyhow::Result<rpc_gateway::RpcUploadFileResponse> {
+    ) -> anyhow::Result<RpcUploadFileResponse> {
         self.rpc_gateway
             .upload_file(session_id, filename, content, mime_type)
             .await
@@ -606,7 +610,7 @@ impl SyncEngine {
         &self,
         session_id: &str,
         path: &str,
-    ) -> anyhow::Result<rpc_gateway::RpcDeleteUploadResponse> {
+    ) -> anyhow::Result<RpcDeleteUploadResponse> {
         self.rpc_gateway.delete_upload_file(session_id, path).await
     }
 
@@ -615,7 +619,7 @@ impl SyncEngine {
         session_id: &str,
         args: &[String],
         cwd: Option<&str>,
-    ) -> anyhow::Result<rpc_gateway::RpcCommandResponse> {
+    ) -> anyhow::Result<RpcCommandResponse> {
         self.rpc_gateway.run_ripgrep(session_id, args, cwd).await
     }
 
@@ -629,8 +633,8 @@ impl SyncEngine {
             .await
     }
 
-    pub async fn list_skills(&self, session_id: &str) -> anyhow::Result<Value> {
-        self.rpc_gateway.list_skills(session_id).await
+    pub async fn list_skills(&self, session_id: &str, agent: &str) -> anyhow::Result<Value> {
+        self.rpc_gateway.list_skills(session_id, agent).await
     }
 
     pub async fn merge_sessions(

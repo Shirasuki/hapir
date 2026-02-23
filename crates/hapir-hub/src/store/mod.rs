@@ -285,6 +285,7 @@ impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for PragmaCustomizer
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hapir_shared::schemas::HapirMachineMetadata;
     use serde_json::json;
 
     fn test_store() -> Store {
@@ -407,7 +408,14 @@ mod tests {
     fn machine_crud() {
         let store = test_store();
         let conn = &store.conn();
-        let meta = json!({"name": "my-machine"});
+        let meta = HapirMachineMetadata {
+            host: "my-machine".to_string(),
+            platform: "unknown".to_string(),
+            happy_cli_version: "".to_string(),
+            home_dir: "~".to_string(),
+            happy_home_dir: "~".to_string(),
+            happy_lib_dir: "~".to_string(),
+        };
 
         let m = machines::get_or_create_machine(conn, "m1", &meta, None, "default").unwrap();
         assert_eq!(m.id, "m1");
@@ -433,7 +441,15 @@ mod tests {
     fn machine_runner_state_sets_active() {
         let store = test_store();
         let conn = &store.conn();
-        let meta = json!({});
+        let meta = HapirMachineMetadata {
+            host: "my-machine111".to_string(),
+            platform: "unknown".to_string(),
+            happy_cli_version: "".to_string(),
+            home_dir: "~".to_string(),
+            happy_home_dir: "~".to_string(),
+            happy_lib_dir: "~".to_string(),
+        };
+
         let m = machines::get_or_create_machine(conn, "m1", &meta, None, "default").unwrap();
         assert!(!m.active);
 

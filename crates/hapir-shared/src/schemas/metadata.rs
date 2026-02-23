@@ -7,7 +7,7 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 #[ts(rename_all = "camelCase")]
-pub struct MetadataSummary {
+pub struct SessionMetadataSummary {
     pub text: String,
     pub updated_at: f64,
 }
@@ -16,7 +16,7 @@ pub struct MetadataSummary {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 #[ts(rename_all = "camelCase")]
-pub struct WorktreeMetadata {
+pub struct SessionWorktreeMetadata {
     pub base_path: String,
     pub branch: String,
     pub name: String,
@@ -30,7 +30,7 @@ pub struct WorktreeMetadata {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 #[ts(rename_all = "camelCase")]
-pub struct Metadata {
+pub struct HapirSessionMetadata {
     pub path: String,
     pub host: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,7 +40,7 @@ pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<MetadataSummary>,
+    pub summary: Option<SessionMetadataSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub machine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,7 +68,7 @@ pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_pid: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_by: Option<StartedBy>,
+    pub started_by: Option<SessionStartedBy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,14 +81,14 @@ pub struct Metadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flavor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<WorktreeMetadata>,
+    pub worktree: Option<SessionWorktreeMetadata>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
 #[ts(rename_all = "lowercase")]
-pub enum StartedBy {
+pub enum SessionStartedBy {
     Runner,
     Terminal,
 }

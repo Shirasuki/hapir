@@ -1,6 +1,7 @@
-use std::path::PathBuf;
-
 use serde_json::Value;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::fs::metadata;
 use tracing::debug;
 
 /// Parsed plugin installation info.
@@ -14,13 +15,13 @@ pub struct PluginInstall {
 /// parent (e.g. `.../systems-programming/unknown` -> `.../systems-programming/1.2.0`).
 pub async fn resolve_plugin_install_path(install_path: &str) -> Option<PathBuf> {
     let path = PathBuf::from(install_path);
-    if tokio::fs::metadata(&path).await.is_ok() {
+    if metadata(&path).await.is_ok() {
         return Some(path);
     }
 
     let parent = path.parent()?;
     let mut reader = tokio::fs::read_dir(parent).await.ok()?;
-    let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
+    let mut newest: Option<(PathBuf, SystemTime)> = None;
     while let Ok(Some(entry)) = reader.next_entry().await {
         let p = entry.path();
         if !p.is_dir() {
@@ -31,7 +32,7 @@ pub async fn resolve_plugin_install_path(install_path: &str) -> Option<PathBuf> 
             .await
             .ok()
             .and_then(|m| m.modified().ok())
-            .unwrap_or(std::time::UNIX_EPOCH);
+            .unwrap_or(UNIX_EPOCH);
         if newest.as_ref().is_none_or(|(_, t)| mtime > *t) {
             newest = Some((p, mtime));
         }
@@ -46,7 +47,7 @@ pub async fn resolve_plugin_install_path(install_path: &str) -> Option<PathBuf> 
 }
 
 /// Read installed_plugins.json and return resolved (name, install_path) pairs.
-pub async fn get_installed_plugins() -> Vec<PluginInstall> {
+pub async fn get_claude_installed_plugins() -> Vec<PluginInstall> {
     let config_dir = std::env::var("CLAUDE_CONFIG_DIR")
         .ok()
         .or_else(|| dirs_next::home_dir().map(|h| h.join(".claude").to_string_lossy().to_string()))

@@ -1,6 +1,6 @@
-use std::fs::OpenOptions;
+use std::fs::{write, OpenOptions};
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Result, bail};
@@ -54,7 +54,7 @@ pub fn write_settings(path: &Path, settings: &Settings) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let content = serde_json::to_string_pretty(settings)?;
-    std::fs::write(path, content)?;
+    write(path, content)?;
     Ok(())
 }
 
@@ -110,7 +110,7 @@ pub fn update_settings(path: &Path, updater: impl FnOnce(&mut Settings)) -> Resu
 
         // Write atomically via rename
         let content = serde_json::to_string_pretty(&settings)?;
-        std::fs::write(&tmp_path, &content)?;
+        write(&tmp_path, &content)?;
         std::fs::rename(&tmp_path, path)?;
 
         Ok(settings)
@@ -132,7 +132,7 @@ pub fn read_runner_state(path: &Path) -> Option<RunnerLocalState> {
 
 pub fn write_runner_state(path: &Path, state: &RunnerLocalState) -> Result<()> {
     let content = serde_json::to_string_pretty(state)?;
-    std::fs::write(path, content)?;
+    write(path, content)?;
     Ok(())
 }
 
@@ -183,7 +183,7 @@ pub fn acquire_runner_lock(lock_path: &Path, max_attempts: u32) -> Option<Runner
 }
 
 pub struct RunnerLockGuard {
-    path: std::path::PathBuf,
+    path: PathBuf,
 }
 
 impl Drop for RunnerLockGuard {

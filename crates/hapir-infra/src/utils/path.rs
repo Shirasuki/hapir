@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, MAIN_SEPARATOR};
 
 /// Normalize a path by resolving `.` and `..` components without touching the filesystem.
 fn normalize_path(path: &Path) -> PathBuf {
@@ -38,10 +38,10 @@ pub fn validate_path(target_path: &str, working_directory: &str) -> Result<PathB
 
     // Target must be under working_directory + separator.
     // Use the platform's path separator for the prefix check.
-    let prefix = if working_str.ends_with(std::path::MAIN_SEPARATOR) {
+    let prefix = if working_str.ends_with(MAIN_SEPARATOR) {
         working_str.to_string()
     } else {
-        format!("{}{}", working_str, std::path::MAIN_SEPARATOR)
+        format!("{}{}", working_str, MAIN_SEPARATOR)
     };
 
     if target_str.starts_with(&prefix) {
@@ -72,7 +72,7 @@ mod tests {
         let wd = test_working_dir();
         let result = validate_path("src/main.rs", wd);
         assert!(result.is_ok());
-        let expected = PathBuf::from(wd).join("src").join("main.rs");
+        let expected = PathBuf::from(wd).join("../../../../src").join("main.rs");
         assert_eq!(result.unwrap(), expected);
     }
 

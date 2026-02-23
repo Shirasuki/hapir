@@ -50,7 +50,7 @@ pub fn get_agent_name(session: &Session) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hapir_shared::schemas::{Metadata, MetadataSummary};
+    use hapir_shared::schemas::{HapirSessionMetadata, SessionMetadataSummary};
 
     fn base_session() -> Session {
         Session {
@@ -74,8 +74,8 @@ mod tests {
         }
     }
 
-    fn base_metadata() -> Metadata {
-        Metadata {
+    fn base_metadata() -> HapirSessionMetadata {
+        HapirSessionMetadata {
             path: String::new(),
             host: "localhost".to_string(),
             version: None,
@@ -118,7 +118,7 @@ mod tests {
     fn session_name_from_summary() {
         let mut session = base_session();
         let mut meta = base_metadata();
-        meta.summary = Some(MetadataSummary {
+        meta.summary = Some(SessionMetadataSummary {
             text: "A summary".to_string(),
             updated_at: 0.0,
         });

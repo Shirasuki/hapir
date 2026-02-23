@@ -2,18 +2,16 @@ use std::io::{self, BufRead, Write};
 
 use anyhow::{Result, bail};
 use atty::Stream;
-use tracing::{debug, info, warn};
-
+use hapir_infra::auth::auth_and_setup_machine_with_state;
 use hapir_infra::config::Configuration;
 use hapir_infra::persistence;
-use hapir_infra::process::spawn_runner_background;
+use hapir_infra::utils::process::spawn_runner_background;
 use hapir_runner::control_client;
+use tracing::{debug, info, warn};
 
 /// Initialize the API token from settings file, falling back to interactive
 /// prompt if running in a TTY.
 pub fn initialize_token(config: &mut Configuration) -> Result<()> {
-    config.load_with_settings()?;
-
     if !config.cli_api_token.is_empty() {
         debug!("token already set (env or settings)");
         return Ok(());
@@ -51,11 +49,6 @@ pub fn initialize_token(config: &mut Configuration) -> Result<()> {
 
     config.cli_api_token = token;
     Ok(())
-}
-
-/// Register (or confirm) the machine with the hub API. Returns the machine_id.
-pub async fn auth_and_setup_machine(config: &Configuration) -> Result<String> {
-    hapir_infra::auth::auth_and_setup_machine(config).await
 }
 
 /// Ensure the runner process is alive, auto-starting it if needed.
@@ -98,6 +91,6 @@ pub async fn ensure_runner(config: &Configuration, _machine_id: String) -> Resul
 /// token -> machine registration -> runner check.
 pub async fn full_init(config: &mut Configuration) -> Result<Option<u16>> {
     initialize_token(config)?;
-    let machine_id = auth_and_setup_machine(config).await?;
+    let machine_id = auth_and_setup_machine_with_state(config, None).await?;
     ensure_runner(config, machine_id).await
 }

@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use hapir_shared::schemas::StartedBy;
+use hapir_shared::schemas::SessionStartedBy;
 
 use super::local_launcher::claude_local_launcher;
 use super::remote_launcher::claude_remote_launcher;
@@ -73,15 +73,15 @@ fn compute_mode_hash(mode: &EnhancedMode) -> String {
 }
 
 /// Map a string started_by value to the StartedBy enum.
-fn resolve_started_by(value: Option<&str>) -> StartedBy {
+fn resolve_started_by(value: Option<&str>) -> SessionStartedBy {
     match value {
-        Some("runner") => StartedBy::Runner,
-        _ => StartedBy::Terminal,
+        Some("runner") => SessionStartedBy::Runner,
+        _ => SessionStartedBy::Terminal,
     }
 }
 
 /// Determine the starting session mode from options.
-fn resolve_starting_mode(options: &StartOptions, started_by: StartedBy) -> SessionMode {
+fn resolve_starting_mode(options: &StartOptions, started_by: SessionStartedBy) -> SessionMode {
     if let Some(ref mode_str) = options.starting_mode {
         match mode_str.as_str() {
             "remote" => return SessionMode::Remote,
@@ -91,8 +91,8 @@ fn resolve_starting_mode(options: &StartOptions, started_by: StartedBy) -> Sessi
     }
     // Default: local for terminal, remote for runner
     match started_by {
-        StartedBy::Terminal => SessionMode::Local,
-        StartedBy::Runner => SessionMode::Remote,
+        SessionStartedBy::Terminal => SessionMode::Local,
+        SessionStartedBy::Runner => SessionMode::Remote,
     }
 }
 
@@ -114,7 +114,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
     );
 
     // Bootstrap session
-    let config = Configuration::create()?;
+    let config = Configuration::new()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "claude".to_string(),
@@ -502,7 +502,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
             Box::pin(async move { claude_remote_launcher(&cs).await })
         }),
         on_session_ready: None,
-        terminal_reclaim: started_by == StartedBy::Terminal,
+        terminal_reclaim: started_by == SessionStartedBy::Terminal,
     })
     .await;
 

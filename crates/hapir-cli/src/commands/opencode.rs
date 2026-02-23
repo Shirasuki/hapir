@@ -30,7 +30,7 @@ pub struct OpencodeArgs {
 pub async fn run(args: OpencodeArgs) -> Result<()> {
     debug!(?args, "opencode command starting");
 
-    let mut config = Configuration::create()?;
+    let mut config = Configuration::new()?;
     let runner_port = common::full_init(&mut config).await?;
 
     let working_directory = std::env::current_dir()?.to_string_lossy().to_string();

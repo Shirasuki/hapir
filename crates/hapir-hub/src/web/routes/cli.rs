@@ -133,12 +133,17 @@ async fn create_machine(
         );
     }
 
+    let runner_state_value = body
+        .runner_state
+        .as_ref()
+        .and_then(|s| serde_json::to_value(s).ok());
+
     match state
         .sync_engine
         .get_or_create_machine(
             &body.id,
             &body.metadata,
-            body.runner_state.as_ref(),
+            runner_state_value.as_ref(),
             namespace,
         )
         .await

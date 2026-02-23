@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hapir_shared::schemas::SyncEvent;
+use hapir_shared::schemas::{HapirMachineMetadata, SyncEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -104,7 +104,7 @@ impl MachineCache {
     pub fn get_or_create_machine(
         &mut self,
         id: &str,
-        metadata: &Value,
+        metadata: &HapirMachineMetadata,
         runner_state: Option<&Value>,
         namespace: &str,
         store: &Store,

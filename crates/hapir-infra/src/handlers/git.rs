@@ -1,22 +1,27 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
+use tokio::process::Command;
+use tokio::time::timeout;
 use tracing::debug;
 
-use crate::rpc::RpcRegistry;
+use hapir_shared::rpc::bash::RpcCommandResponse;
+use hapir_shared::rpc::git::{
+    RpcGitDiffFileRequest, RpcGitDiffNumstatRequest, RpcGitStatusRequest,
+};
 
-use super::path_security::validate_path;
+use crate::rpc::RpcRegistry;
+use crate::utils::path::validate_path;
 
 async fn run_git_command(args: &[&str], cwd: &str, timeout_ms: u64) -> Value {
-    let result = tokio::time::timeout(
+    let result = timeout(
         Duration::from_millis(timeout_ms),
-        tokio::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output(),
+        Command::new("git").args(args).current_dir(cwd).output(),
     )
     .await;
+
+    let mut response = RpcCommandResponse::default();
 
     match result {
         Ok(Ok(output)) => {
@@ -24,25 +29,42 @@ async fn run_git_command(args: &[&str], cwd: &str, timeout_ms: u64) -> Value {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             if output.status.success() {
-                json!({"success": true, "stdout": stdout, "stderr": stderr, "exitCode": code})
+                response.success = true;
+                response.stdout = Some(stdout);
+                response.stderr = Some(stderr);
+                response.exit_code = Some(code);
+                response.error = None;
             } else {
-                json!({"success": false, "error": stderr.clone(), "stdout": stdout, "stderr": stderr, "exitCode": code})
+                response.success = false;
+                response.stdout = Some(stdout);
+                response.stderr = Some(stderr.clone());
+                response.exit_code = Some(code);
+                response.error = Some(stderr);
             }
         }
         Ok(Err(e)) => {
-            json!({"success": false, "error": e.to_string(), "stdout": "", "stderr": e.to_string(), "exitCode": 1})
+            response.success = false;
+            response.stdout = Some(String::new());
+            response.stderr = Some(e.to_string());
+            response.exit_code = Some(1);
+            response.error = Some(e.to_string());
         }
         Err(_) => {
-            json!({"success": false, "error": "Command timed out", "stdout": "", "stderr": "", "exitCode": -1})
+            response.success = false;
+            response.stdout = Some(String::new());
+            response.stderr = Some(String::new());
+            response.exit_code = Some(-1);
+            response.error = Some("Command timed out".into());
         }
     }
+    serde_json::to_value(response).unwrap()
 }
 
-fn resolve_cwd(params: &Value, wd: &str) -> Result<String, Value> {
-    let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or(wd);
-
+#[inline]
+fn resolve_cwd(cwd: Option<&str>, wd: &str) -> Result<String, String> {
+    let cwd = cwd.unwrap_or(wd);
     if let Err(e) = validate_path(cwd, wd) {
-        return Err(json!({"success": false, "error": e}));
+        return Err(e);
     }
     Ok(cwd.to_string())
 }
@@ -56,14 +78,16 @@ pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_dire
         rpc.register("git-status", move |params: Value| {
             let wd = wd.clone();
             async move {
-                let cwd = match resolve_cwd(&params, &wd) {
+                let req: RpcGitStatusRequest = serde_json::from_value(params).unwrap_or_default();
+                let cwd = match resolve_cwd(req.cwd.as_deref(), &wd) {
                     Ok(c) => c,
-                    Err(e) => return e,
+                    Err(e) => {
+                        let mut response = RpcCommandResponse::default();
+                        response.error = Some(e);
+                        return serde_json::to_value(response).unwrap();
+                    },
                 };
-                let timeout = params
-                    .get("timeout")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(10_000);
+                let timeout = req.timeout.unwrap_or(10_000);
                 debug!(cwd = %cwd, "git-status handler");
                 run_git_command(
                     &[
@@ -87,18 +111,18 @@ pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_dire
         rpc.register("git-diff-numstat", move |params: Value| {
             let wd = wd.clone();
             async move {
-                let cwd = match resolve_cwd(&params, &wd) {
+                let req: RpcGitDiffNumstatRequest =
+                    serde_json::from_value(params).unwrap_or_default();
+                let cwd = match resolve_cwd(req.cwd.as_deref(), &wd) {
                     Ok(c) => c,
-                    Err(e) => return e,
+                    Err(e) => {
+                        let mut response = RpcCommandResponse::default();
+                        response.error = Some(e);
+                        return serde_json::to_value(response).unwrap();
+                    },
                 };
-                let timeout = params
-                    .get("timeout")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(10_000);
-                let staged = params
-                    .get("staged")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let timeout = req.timeout.unwrap_or(10_000);
+                let staged = req.staged.unwrap_or(false);
                 debug!(cwd = %cwd, staged, "git-diff-numstat handler");
 
                 let args: Vec<&str> = if staged {
@@ -118,31 +142,33 @@ pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_dire
         rpc.register("git-diff-file", move |params: Value| {
             let wd = wd.clone();
             async move {
-                let cwd = match resolve_cwd(&params, &wd) {
+                let mut response = RpcCommandResponse::default();
+                let req: RpcGitDiffFileRequest = match serde_json::from_value(params) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        response.error = Some("Missing 'filePath' field".to_string());
+                        return serde_json::to_value(response).unwrap();
+                    }
+                };
+                let cwd = match resolve_cwd(req.cwd.as_deref(), &wd) {
                     Ok(c) => c,
-                    Err(e) => return e,
+                    Err(e) => {
+                        response.error = Some(e);
+                        return serde_json::to_value(response).unwrap();
+                    }
                 };
-                let file_path = match params.get("filePath").and_then(|v| v.as_str()) {
-                    Some(p) => p.to_string(),
-                    None => return json!({"success": false, "error": "Missing 'filePath' field"}),
-                };
-                if let Err(e) = validate_path(&file_path, &wd) {
-                    return json!({"success": false, "error": e});
+                if let Err(e) = validate_path(&req.file_path, &wd) {
+                    response.error = Some(e);
+                    return serde_json::to_value(response).unwrap();
                 }
-                let timeout = params
-                    .get("timeout")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(10_000);
-                let staged = params
-                    .get("staged")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                debug!(cwd = %cwd, file_path = %file_path, staged, "git-diff-file handler");
+                let timeout = req.timeout.unwrap_or(10_000);
+                let staged = req.staged.unwrap_or(false);
+                debug!(cwd = %cwd, file_path = %req.file_path, staged, "git-diff-file handler");
 
                 let args: Vec<&str> = if staged {
-                    vec!["diff", "--cached", "--no-ext-diff", "--", &file_path]
+                    vec!["diff", "--cached", "--no-ext-diff", "--", &req.file_path]
                 } else {
-                    vec!["diff", "--no-ext-diff", "--", &file_path]
+                    vec!["diff", "--no-ext-diff", "--", &req.file_path]
                 };
                 run_git_command(&args, &cwd, timeout).await
             }

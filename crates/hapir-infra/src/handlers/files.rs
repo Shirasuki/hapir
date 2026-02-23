@@ -1,15 +1,19 @@
+use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
-use crate::rpc::RpcRegistry;
+use hapir_shared::rpc::files::{
+    RpcReadFileRequest, RpcReadFileResponse, RpcWriteFileRequest, RpcWriteFileResponse,
+};
 
-use super::path_security::validate_path;
+use crate::rpc::RpcRegistry;
+use crate::utils::path::validate_path;
 
 pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = Arc::new(working_directory.to_string());
@@ -20,26 +24,35 @@ pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
         rpc.register("readFile", move |params: Value| {
             let wd = wd.clone();
             async move {
-                let path_str = match params.get("path").and_then(|v| v.as_str()) {
-                    Some(p) => p.to_string(),
-                    None => return json!({"success": false, "error": "Missing 'path' field"}),
+                let mut response = RpcReadFileResponse::default();
+                let req: RpcReadFileRequest = match serde_json::from_value(params) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        response.error = Some("Missing 'path' field".into());
+                        return serde_json::to_value(response).unwrap();
+                    },
                 };
 
-                if let Err(e) = validate_path(&path_str, &wd) {
-                    return json!({"success": false, "error": e});
+                if let Err(e) = validate_path(&req.path, &wd) {
+                    response.error = Some(e);
+                    return serde_json::to_value(response).unwrap();
                 }
 
-                let resolved = Path::new(wd.as_str()).join(&path_str);
+                let resolved = Path::new(wd.as_str()).join(&req.path);
                 debug!(path = %resolved.display(), "readFile handler");
 
                 match tokio::fs::read(&resolved).await {
                     Ok(bytes) => {
                         let content = BASE64.encode(&bytes);
-                        json!({"success": true, "content": content})
+                        response.success = true;
+                        response.content = Some(content);
+                        response.error = None;
+                        serde_json::to_value(response).unwrap()
                     }
                     Err(e) => {
                         debug!(error = %e, "Failed to read file");
-                        json!({"success": false, "error": format!("Failed to read file: {e}")})
+                        response.error = Some(format!("Failed to read file: {e}"));
+                        serde_json::to_value(response).unwrap()
                     }
                 }
             }
@@ -53,78 +66,73 @@ pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
         rpc.register("writeFile", move |params: Value| {
             let wd = wd.clone();
             async move {
-                let path_str = match params.get("path").and_then(|v| v.as_str()) {
-                    Some(p) => p.to_string(),
-                    None => return json!({"success": false, "error": "Missing 'path' field"}),
-                };
-                let content_b64 = match params.get("content").and_then(|v| v.as_str()) {
-                    Some(c) => c.to_string(),
-                    None => return json!({"success": false, "error": "Missing 'content' field"}),
+                let mut response = RpcWriteFileResponse::default();
+                let req: RpcWriteFileRequest = match serde_json::from_value(params) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        response.error = Some("Missing required fields".into());
+                        return serde_json::to_value(response).unwrap();
+                    },
                 };
 
-                if let Err(e) = validate_path(&path_str, &wd) {
-                    return json!({"success": false, "error": e});
+                if let Err(e) = validate_path(&req.path, &wd) {
+                    response.error = Some(e);
+                    return serde_json::to_value(response).unwrap();
                 }
 
-                let resolved = Path::new(wd.as_str()).join(&path_str);
+                let resolved = Path::new(wd.as_str()).join(&req.path);
                 debug!(path = %resolved.display(), "writeFile handler");
 
-                let expected_hash = params
-                    .get("expectedHash")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-
-                // Decode base64 content
-                let bytes = match BASE64.decode(&content_b64) {
+                let bytes = match BASE64.decode(&req.content) {
                     Ok(b) => b,
                     Err(e) => {
-                        return json!({"success": false, "error": format!("Invalid base64 content: {e}")})
-                    }
+                        response.error = Some(format!("Invalid base64 content: {e}"));
+                        return serde_json::to_value(response).unwrap();
+                    },
                 };
 
                 // Hash-based conflict detection
-                if let Some(ref expected) = expected_hash {
+                if let Some(ref expected) = req.expected_hash {
                     match tokio::fs::read(&resolved).await {
                         Ok(existing) => {
                             let mut hasher = Sha256::new();
                             hasher.update(&existing);
                             let actual_hash = hex::encode(hasher.finalize());
                             if &actual_hash != expected {
-                                return json!({
-                                    "success": false,
-                                    "error": format!(
-                                        "File hash mismatch. Expected: {expected}, Actual: {actual_hash}"
-                                    )
-                                });
+                                response.error = Some(format!(
+                                    "File hash mismatch. Expected: {expected}, Actual: {actual_hash}"
+                                ));
+                                return serde_json::to_value(response).unwrap();
                             }
                         }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            return json!({"success": false, "error": "File does not exist but hash was provided"});
+                        Err(e) if e.kind() == ErrorKind::NotFound => {
+                            response.error = Some("File does not exist but hash was provided".into());
+                            return serde_json::to_value(response).unwrap();
                         }
                         Err(e) => {
-                            return json!({"success": false, "error": format!("Failed to read existing file: {e}")});
+                            response.error = Some(format!("Failed to read existing file: {e}"));
+                            return serde_json::to_value(response).unwrap();
                         }
                     }
                 } else {
-                    // No hash means file should be new
                     match tokio::fs::metadata(&resolved).await {
                         Ok(_) => {
-                            return json!({"success": false, "error": "File already exists but was expected to be new"});
+                            response.error = Some("File already exists but was expected to be new".into());
+                            return serde_json::to_value(response).unwrap();
                         }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            // Good - file doesn't exist
-                        }
+                        Err(e) if e.kind() == ErrorKind::NotFound => {}
                         Err(e) => {
-                            return json!({"success": false, "error": format!("Failed to check file: {e}")});
+                            response.error = Some(format!("Failed to check file: {e}"));
+                            return serde_json::to_value(response).unwrap();
                         }
                     }
                 }
 
-                // Write the file
                 if let Some(parent) = resolved.parent()
                     && let Err(e) = tokio::fs::create_dir_all(parent).await
                 {
-                    return json!({"success": false, "error": format!("Failed to create directories: {e}")});
+                    response.error = Some(format!("Failed to create directories: {e}"));
+                    return serde_json::to_value(response).unwrap();
                 }
 
                 match tokio::fs::write(&resolved, &bytes).await {
@@ -132,11 +140,15 @@ pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
                         let mut hasher = Sha256::new();
                         hasher.update(&bytes);
                         let hash = hex::encode(hasher.finalize());
-                        json!({"success": true, "hash": hash})
+                        response.success = true;
+                        response.hash = Some(hash);
+                        response.error = None;
+                        serde_json::to_value(response).unwrap()
                     }
                     Err(e) => {
                         debug!(error = %e, "Failed to write file");
-                        json!({"success": false, "error": format!("Failed to write file: {e}")})
+                        response.error = Some(format!("Failed to write file: {e}"));
+                        serde_json::to_value(response).unwrap()
                     }
                 }
             }

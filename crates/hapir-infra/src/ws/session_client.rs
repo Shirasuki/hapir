@@ -2,11 +2,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use hapir_shared::schemas::{Metadata, Session};
+use hapir_shared::schemas::{HapirSessionMetadata, Session};
 
 use super::client::{WsClient, WsClientConfig};
 use crate::rpc::RpcRegistry;
@@ -15,7 +15,7 @@ use crate::rpc::RpcRegistry;
 pub struct WsSessionClient {
     ws: Arc<WsClient>,
     session_id: String,
-    metadata: Arc<Mutex<Option<Metadata>>>,
+    metadata: Arc<Mutex<Option<HapirSessionMetadata>>>,
     metadata_version: Arc<Mutex<i64>>,
     agent_state: Arc<Mutex<Option<Value>>>,
     agent_state_version: Arc<Mutex<i64>>,
@@ -70,7 +70,8 @@ impl WsSessionClient {
                         let current = *md_ver.lock().await;
                         if new_ver > current
                             && let Some(new_md) = data.get("metadata")
-                            && let Ok(parsed) = serde_json::from_value::<Metadata>(new_md.clone())
+                            && let Ok(parsed) =
+                                serde_json::from_value::<HapirSessionMetadata>(new_md.clone())
                         {
                             *md.lock().await = Some(parsed);
                             *md_ver.lock().await = new_ver;
@@ -166,7 +167,7 @@ impl WsSessionClient {
     /// Update metadata with optimistic concurrency.
     pub async fn update_metadata<F>(&self, handler: F) -> anyhow::Result<()>
     where
-        F: FnOnce(Metadata) -> Metadata,
+        F: FnOnce(HapirSessionMetadata) -> HapirSessionMetadata,
     {
         let current = match self.metadata.lock().await.clone() {
             Some(m) => m,
@@ -299,7 +300,7 @@ impl WsSessionClient {
     }
 
     #[allow(dead_code)]
-    pub async fn metadata(&self) -> Option<Metadata> {
+    pub async fn metadata(&self) -> Option<HapirSessionMetadata> {
         self.metadata.lock().await.clone()
     }
 }

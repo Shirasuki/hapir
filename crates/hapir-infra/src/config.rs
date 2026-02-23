@@ -1,4 +1,8 @@
+use crate::persistence;
+use anyhow::anyhow;
+use std::fs::create_dir_all;
 use std::path::PathBuf;
+use tracing::debug;
 
 /// Global configuration for HAPIR CLI.
 ///
@@ -18,7 +22,7 @@ pub struct Configuration {
 
 impl Configuration {
     /// Create configuration from environment variables and defaults.
-    pub fn create() -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
         let api_url =
             std::env::var("HAPIR_API_URL").unwrap_or_else(|_| "http://localhost:3006".into());
         let cli_api_token = std::env::var("CLI_API_TOKEN").unwrap_or_default();
@@ -36,15 +40,15 @@ impl Configuration {
                 PathBuf::from(home)
             }
         } else {
-            let user_home = dirs_next::home_dir()
-                .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
+            let user_home =
+                dirs_next::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
             user_home.join(".hapir")
         };
 
-        std::fs::create_dir_all(&home_dir)?;
+        create_dir_all(&home_dir)?;
 
         let logs_dir = home_dir.join("logs");
-        std::fs::create_dir_all(&logs_dir)?;
+        create_dir_all(&logs_dir)?;
 
         let settings_file = home_dir.join("settings.json");
         let private_key_file = home_dir.join("access.key");
@@ -56,7 +60,7 @@ impl Configuration {
             Ok("true") | Ok("1") | Ok("yes")
         );
 
-        Ok(Self {
+        let mut config = Self {
             api_url,
             cli_api_token,
             home_dir,
@@ -66,25 +70,32 @@ impl Configuration {
             runner_state_file,
             runner_lock_file,
             is_experimental,
-        })
+        };
+
+        if config.cli_api_token.is_empty() {
+            debug!("CLI_API_TOKEN not set, try load from settings file");
+            config.load_from_settings()?;
+        }
+
+        Ok(config)
     }
 
     /// Load settings from file and merge with env-based config.
     ///
     /// Priority: env > settings file > default.
-    pub fn load_with_settings(&mut self) -> anyhow::Result<()> {
-        let settings = crate::persistence::read_settings(&self.settings_file)?;
+    fn load_from_settings(&mut self) -> anyhow::Result<()> {
+        let settings = persistence::read_settings(&self.settings_file)?;
 
         // CLI API token: env > settings file
         if self.cli_api_token.is_empty() {
             if let Some(ref token) = settings.cli_api_token {
-                tracing::debug!("CLI_API_TOKEN loaded from settings file");
+                debug!("CLI_API_TOKEN loaded from settings file");
                 self.cli_api_token = token.clone();
                 // Propagate to env so child processes (e.g. spawned sessions) inherit it
                 unsafe { std::env::set_var("CLI_API_TOKEN", token) };
             }
         } else {
-            tracing::debug!("CLI_API_TOKEN loaded from environment variable");
+            debug!("CLI_API_TOKEN loaded from environment variable");
         }
 
         // API URL: env > settings file > default

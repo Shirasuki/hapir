@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::modes::ModelMode;
-use crate::schemas::{Session, TodoStatus, WorktreeMetadata};
+use crate::schemas::{Session, TodoStatus, SessionWorktreeMetadata};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +19,7 @@ pub struct SessionSummaryMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flavor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<WorktreeMetadata>,
+    pub worktree: Option<SessionWorktreeMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]

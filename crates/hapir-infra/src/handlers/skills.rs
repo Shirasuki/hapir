@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
-use tracing::debug;
+    use serde_json::Value;
 
-use super::plugins::get_installed_plugins;
+use hapir_shared::rpc::skills::{RpcListSkillsRequest, RpcListSkillsResponse, RpcSkillSummary};
+
 use crate::rpc::RpcRegistry;
+use crate::utils::plugin::get_claude_installed_plugins;
 
-fn skills_root() -> PathBuf {
+fn codex_skills_root() -> PathBuf {
     let codex_home = std::env::var("CODEX_HOME")
         .ok()
         .or_else(|| dirs_next::home_dir().map(|h| h.join(".codex").to_string_lossy().to_string()))
@@ -46,7 +47,7 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
     (name, description)
 }
 
-fn extract_skill_summary(skill_dir: &Path, content: &str) -> Option<Value> {
+fn extract_skill_summary(skill_dir: &Path, content: &str) -> Option<RpcSkillSummary> {
     let (name_from_fm, description) = parse_frontmatter(content);
     let name_from_dir = skill_dir
         .file_name()
@@ -58,7 +59,7 @@ fn extract_skill_summary(skill_dir: &Path, content: &str) -> Option<Value> {
     if name.is_empty() {
         return None;
     }
-    Some(json!({"name": name, "description": description}))
+    Some(RpcSkillSummary { name, description })
 }
 
 async fn list_skill_dirs(root: &Path) -> Vec<PathBuf> {
@@ -89,7 +90,7 @@ async fn list_skill_dirs(root: &Path) -> Vec<PathBuf> {
     result
 }
 
-async fn scan_skills_from_dirs(dirs: &[PathBuf]) -> Vec<Value> {
+async fn scan_skills_from_dirs(dirs: &[PathBuf]) -> Vec<RpcSkillSummary> {
     let mut skills = vec![];
     for dir in dirs {
         let skill_file = dir.join("SKILL.md");
@@ -102,33 +103,39 @@ async fn scan_skills_from_dirs(dirs: &[PathBuf]) -> Vec<Value> {
     skills
 }
 
-async fn list_skills_impl() -> Vec<Value> {
-    let root = skills_root();
-    let codex_dirs = list_skill_dirs(&root).await;
-    let mut skills = scan_skills_from_dirs(&codex_dirs).await;
+async fn list_skills_impl(agent: &str) -> Vec<RpcSkillSummary> {
+    let mut skills = vec![];
 
-    // Also scan skills from installed plugins
-    let plugins = get_installed_plugins().await;
-    for plugin in &plugins {
-        let skills_dir = plugin.install_path.join("skills");
-        let plugin_skill_dirs = list_skill_dirs(&skills_dir).await;
-        let plugin_skills = scan_skills_from_dirs(&plugin_skill_dirs).await;
-        skills.extend(plugin_skills);
+    match agent {
+        "codex" => {
+            let root = codex_skills_root();
+            let dirs = list_skill_dirs(&root).await;
+            skills = scan_skills_from_dirs(&dirs).await;
+        }
+        "claude" => {
+            let plugins = get_claude_installed_plugins().await;
+            for plugin in &plugins {
+                let skills_dir = plugin.install_path.join("skills");
+                let plugin_skill_dirs = list_skill_dirs(&skills_dir).await;
+                let plugin_skills = scan_skills_from_dirs(&plugin_skill_dirs).await;
+                skills.extend(plugin_skills);
+            }
+        }
+        _ => {}
     }
 
-    skills.sort_by(|a, b| {
-        let an = a["name"].as_str().unwrap_or("");
-        let bn = b["name"].as_str().unwrap_or("");
-        an.cmp(bn)
-    });
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills
 }
 
 pub async fn register_skills_handlers(rpc: &(impl RpcRegistry + Sync), _working_directory: &str) {
-    rpc.register("listSkills", move |_params: Value| async move {
-        debug!("listSkills");
-        let skills = list_skills_impl().await;
-        json!({"success": true, "skills": skills})
+    rpc.register("listSkills", move |params: Value| async move {
+        let mut response = RpcListSkillsResponse::default();
+        let req: RpcListSkillsRequest = serde_json::from_value(params).unwrap_or_default();
+        let skills = list_skills_impl(&req.agent).await;
+        response.skills = Some(skills);
+        response.success = true;
+        serde_json::to_value(response).unwrap()
     })
     .await;
 }

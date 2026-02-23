@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
+use crate::schemas::HapirMachineMetadata;
+use super::machine::MachineRunnerState;
 use super::message::DecryptedMessage;
 use super::session::Session;
 
@@ -25,8 +26,8 @@ pub struct CreateSessionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CreateMachineRequest {
     pub id: String,
-    pub metadata: Value,
-    pub runner_state: Option<Value>,
+    pub metadata: HapirMachineMetadata,
+    pub runner_state: Option<MachineRunnerState>,
     pub namespace: Option<String>,
 }
 
