@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-    use serde_json::Value;
+use serde_json::Value;
 
 use hapir_shared::rpc::skills::{RpcListSkillsRequest, RpcListSkillsResponse, RpcSkillSummary};
 

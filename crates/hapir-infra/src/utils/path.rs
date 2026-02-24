@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf, MAIN_SEPARATOR};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 
 /// Normalize a path by resolving `.` and `..` components without touching the filesystem.
 fn normalize_path(path: &Path) -> PathBuf {

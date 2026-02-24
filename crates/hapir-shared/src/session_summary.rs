@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::modes::ModelMode;
-use crate::schemas::{Session, TodoStatus, SessionWorktreeMetadata};
+use crate::schemas::{Session, SessionWorktreeMetadata, TodoStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]

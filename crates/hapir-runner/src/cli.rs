@@ -1,9 +1,9 @@
+use crate::control_client;
+use crate::orchestrator;
 use anyhow::bail;
 use hapir_infra::config::CliConfiguration;
 use hapir_infra::persistence;
 use hapir_infra::utils::process::spawn_runner_background;
-use crate::control_client;
-use crate::orchestrator;
 
 pub async fn run(action: Option<&str>) -> anyhow::Result<()> {
     let config = CliConfiguration::new()?;

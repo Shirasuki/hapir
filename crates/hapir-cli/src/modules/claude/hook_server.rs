@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tracing::debug;
 
-use crate::agent::session_base::SessionMode;
+use hapir_shared::modes::SessionMode;
 use hapir_infra::ws::session_client::WsSessionClient;
 
 /// Data received from Claude's SessionStart hook.

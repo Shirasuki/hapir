@@ -45,7 +45,9 @@ fn resolve_tool_call_id(
 ///
 /// Spawns the `claude` CLI process in interactive mode (--input-format stream-json),
 /// enabling bidirectional communication for streaming and permission handling.
-pub async fn claude_remote_launcher(session: &Arc<ClaudeSession<ClaudeEnhancedMode>>) -> LoopResult {
+pub async fn claude_remote_launcher(
+    session: &Arc<ClaudeSession<ClaudeEnhancedMode>>,
+) -> LoopResult {
     let working_directory = session.base.path.clone();
     debug!("[claudeRemoteLauncher] Starting in {}", working_directory);
 

@@ -454,34 +454,37 @@ impl SessionCache {
             .get(session_id)
             .ok_or_else(|| anyhow::anyhow!("session not found"))?;
 
-        let current_meta = session.metadata.clone().unwrap_or_else(|| HapirSessionMetadata {
-            path: String::new(),
-            host: String::new(),
-            version: None,
-            name: None,
-            os: None,
-            summary: None,
-            machine_id: None,
-            claude_session_id: None,
-            codex_session_id: None,
-            gemini_session_id: None,
-            opencode_session_id: None,
-            tools: None,
-            slash_commands: None,
-            home_dir: None,
-            happy_home_dir: None,
-            happy_lib_dir: None,
-            happy_tools_dir: None,
-            started_from_runner: None,
-            host_pid: None,
-            started_by: None,
-            lifecycle_state: None,
-            lifecycle_state_since: None,
-            archived_by: None,
-            archive_reason: None,
-            flavor: None,
-            worktree: None,
-        });
+        let current_meta = session
+            .metadata
+            .clone()
+            .unwrap_or_else(|| HapirSessionMetadata {
+                path: String::new(),
+                host: String::new(),
+                version: None,
+                name: None,
+                os: None,
+                summary: None,
+                machine_id: None,
+                claude_session_id: None,
+                codex_session_id: None,
+                gemini_session_id: None,
+                opencode_session_id: None,
+                tools: None,
+                slash_commands: None,
+                home_dir: None,
+                happy_home_dir: None,
+                happy_lib_dir: None,
+                happy_tools_dir: None,
+                started_from_runner: None,
+                host_pid: None,
+                started_by: None,
+                lifecycle_state: None,
+                lifecycle_state_since: None,
+                archived_by: None,
+                archive_reason: None,
+                flavor: None,
+                worktree: None,
+            });
 
         let mut new_meta = current_meta;
         new_meta.name = Some(name.to_string());

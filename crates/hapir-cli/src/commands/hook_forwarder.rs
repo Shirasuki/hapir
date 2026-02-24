@@ -26,8 +26,10 @@ pub async fn run(args: Vec<String>) -> Result<()> {
 
     debug!(port, body_len = body.len(), endpoint = %endpoint, "forwarding hook payload");
 
-    let url = format!("http://127.0.0.1:{port}/{endpoint}",
-        endpoint = endpoint.trim_start_matches('/'));
+    let url = format!(
+        "http://127.0.0.1:{port}/{endpoint}",
+        endpoint = endpoint.trim_start_matches('/')
+    );
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))

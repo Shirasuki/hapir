@@ -1,7 +1,7 @@
+use hapir_shared::schemas::HapirMachineMetadata;
 use std::env::consts::OS;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use hapir_shared::schemas::HapirMachineMetadata;
 
 pub fn gethostname() -> OsString {
     #[cfg(unix)]
@@ -23,14 +23,18 @@ pub fn gethostname() -> OsString {
         let mut size: u32 = 0;
         unsafe {
             windows_sys::Win32::System::SystemInformation::GetComputerNameExW(
-                format, std::ptr::null_mut(), &mut size,
+                format,
+                std::ptr::null_mut(),
+                &mut size,
             );
         }
         if size > 0 {
             let mut buf = vec![0u16; size as usize];
             let ok = unsafe {
                 windows_sys::Win32::System::SystemInformation::GetComputerNameExW(
-                    format, buf.as_mut_ptr(), &mut size,
+                    format,
+                    buf.as_mut_ptr(),
+                    &mut size,
                 )
             };
             if ok != 0 {

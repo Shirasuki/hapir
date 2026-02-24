@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+use hapir_shared::modes::{ModelMode, PermissionMode, SessionMode};
 use hapir_shared::schemas::{HapirSessionMetadata, Session};
 use hapir_shared::socket::{
     MessageDelta, RpcRegisterRequest, SessionAliveRequest, SessionEndRequest,
@@ -135,8 +136,9 @@ impl WsSessionClient {
                         time: epoch_ms() as i64,
                         thinking: false,
                         thinking_status: None,
-                        mode: "local".to_string(),
-                        runtime: String::new(),
+                        mode: SessionMode::Local,
+                        permission_mode: None,
+                        model_mode: None,
                     };
                     ws.emit(
                         "session-alive",
@@ -152,16 +154,18 @@ impl WsSessionClient {
         &self,
         thinking: bool,
         thinking_status: Option<&str>,
-        mode: &str,
-        runtime: &str,
+        mode: SessionMode,
+        permission_mode: Option<PermissionMode>,
+        model_mode: Option<ModelMode>,
     ) {
         let req = SessionAliveRequest {
             sid: self.session_id.clone(),
             time: epoch_ms() as i64,
             thinking,
             thinking_status: thinking_status.map(|s| s.to_string()),
-            mode: mode.to_string(),
-            runtime: runtime.to_string(),
+            mode,
+            permission_mode,
+            model_mode,
         };
         self.ws
             .emit(

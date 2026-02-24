@@ -9,7 +9,6 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::debug;
 
-
 /// Send a signal to kill a process. If `force` is true, sends SIGKILL;
 /// otherwise sends SIGTERM and escalates to SIGKILL if the process
 /// doesn't die within 2 seconds.

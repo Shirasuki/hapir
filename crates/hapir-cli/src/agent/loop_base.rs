@@ -1,10 +1,14 @@
-use super::session_base::{AgentSessionBase, SessionMode};
+use super::session_base::AgentSessionBase;
+use hapir_shared::modes::SessionMode;
+use hapir_infra::utils::terminal::{
+    clear_reclaim_prompt, prepare_for_local_agent, restore_after_local_agent,
+    set_logging_suppressed, show_reclaim_prompt, show_reclaiming_prompt,
+};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tracing::{debug, info};
-use hapir_infra::utils::terminal::{clear_reclaim_prompt, prepare_for_local_agent, restore_after_local_agent, set_logging_suppressed, show_reclaim_prompt, show_reclaiming_prompt};
 
 /// Result of a loop iteration: switch to the other mode, or exit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,9 +139,8 @@ async fn wait_for_reclaim_keypress(notify: &Notify) {
     {
         use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::System::Console::{
-            GetConsoleMode, GetStdHandle, ReadConsoleInputW, SetConsoleMode,
-            ENABLE_EXTENDED_FLAGS, ENABLE_WINDOW_INPUT, INPUT_RECORD, KEY_EVENT,
-            STD_INPUT_HANDLE,
+            ENABLE_EXTENDED_FLAGS, ENABLE_WINDOW_INPUT, GetConsoleMode, GetStdHandle, INPUT_RECORD,
+            KEY_EVENT, ReadConsoleInputW, STD_INPUT_HANDLE, SetConsoleMode,
         };
 
         // Read console input in a blocking thread to avoid blocking the async runtime
@@ -180,9 +183,7 @@ async fn wait_for_reclaim_keypress(notify: &Notify) {
                 if ReadConsoleInputW(handle, &mut record, 1, &mut events_read) == 0 {
                     return false;
                 }
-                if events_read == 1
-                    && record.EventType as u32 == KEY_EVENT
-                {
+                if events_read == 1 && record.EventType as u32 == KEY_EVENT {
                     let key_event = &record.Event.KeyEvent;
                     // Only react on key-down of Space (0x20)
                     if key_event.bKeyDown != 0 && key_event.uChar.UnicodeChar == 0x20 {

@@ -4,7 +4,7 @@ use crate::sync::{SyncEngine, VersionedUpdateResult};
 use hapir_shared::schemas::{MessageDeltaData, SyncEvent};
 use hapir_shared::socket::{
     MachineAliveRequest, MachineUpdateMetadataRequest, MachineUpdateStateRequest,
-    RpcRegisterRequest, SessionEndRequest,
+    RpcRegisterRequest, SessionAliveRequest, SessionEndRequest,
 };
 use hapir_shared::ws_protocol::{WsBroadcast, WsMessage};
 use serde_json::Value;
@@ -313,41 +313,24 @@ async fn handle_session_alive(
     sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
-    let sid = match data.get("sid").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => return,
-    };
-    let time = match data.get("time").and_then(|v| v.as_i64()) {
-        Some(t) => t,
-        None => return,
+    let req: SessionAliveRequest = match serde_json::from_value(data) {
+        Ok(r) => r,
+        Err(_) => return,
     };
 
-    if let Err(reason) = sync_engine.resolve_session_access(&sid, namespace).await {
-        emit_access_error(conn_mgr, conn_id, "session", &sid, reason).await;
+    if let Err(reason) = sync_engine.resolve_session_access(&req.sid, namespace).await {
+        emit_access_error(conn_mgr, conn_id, "session", &req.sid, reason).await;
         return;
     }
 
-    let thinking = data.get("thinking").and_then(|v| v.as_bool());
-    let thinking_status = data
-        .get("thinkingStatus")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let _mode = data.get("mode").and_then(|v| v.as_str());
-    let permission_mode = data
-        .get("permissionMode")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-    let model_mode = data
-        .get("modelMode")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-
     sync_engine
         .handle_session_alive(
-            &sid,
-            time,
-            thinking,
-            thinking_status,
-            permission_mode,
-            model_mode,
+            &req.sid,
+            req.time,
+            Some(req.thinking),
+            req.thinking_status,
+            req.permission_mode,
+            req.model_mode,
         )
         .await;
 }
@@ -364,7 +347,10 @@ async fn handle_session_end(
         Err(_) => return,
     };
 
-    if let Err(reason) = sync_engine.resolve_session_access(&req.sid, namespace).await {
+    if let Err(reason) = sync_engine
+        .resolve_session_access(&req.sid, namespace)
+        .await
+    {
         emit_access_error(conn_mgr, conn_id, "session", &req.sid, reason).await;
         return;
     }

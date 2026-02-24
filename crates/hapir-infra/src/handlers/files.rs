@@ -30,7 +30,7 @@ pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
                     Err(_) => {
                         response.error = Some("Missing 'path' field".into());
                         return serde_json::to_value(response).unwrap();
-                    },
+                    }
                 };
 
                 if let Err(e) = validate_path(&req.path, &wd) {

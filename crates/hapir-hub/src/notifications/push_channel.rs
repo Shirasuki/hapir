@@ -32,10 +32,7 @@ pub struct PushNotificationChannel {
 }
 
 impl PushNotificationChannel {
-    pub fn new(
-        push_service: Arc<PushService>,
-        sync_engine: Arc<SyncEngine>,
-    ) -> Self {
+    pub fn new(push_service: Arc<PushService>, sync_engine: Arc<SyncEngine>) -> Self {
         Self {
             push_service,
             sync_engine,

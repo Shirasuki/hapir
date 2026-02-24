@@ -1,14 +1,14 @@
-use anyhow::Result;
-use clap::Parser;
-use std::env;
-use tracing::debug;
-use codex::run::run_codex;
+use hapir_shared::modes::SessionMode;
 use crate::commands::common;
 use crate::modules::codex;
 use crate::modules::codex::run::CodexStartOptions;
-use crate::agent::session_base::SessionMode;
+use anyhow::Result;
+use clap::Parser;
+use codex::run::run_codex;
 use hapir_infra::config::CliConfiguration;
 use hapir_shared::schemas::SessionStartedBy;
+use std::env;
+use tracing::debug;
 
 /// Parsed arguments for the codex command.
 #[derive(Parser, Debug, Default)]
@@ -53,14 +53,17 @@ pub async fn run(args: CodexArgs) -> Result<()> {
         other => panic!("Unsupported starting mode: {}", other),
     });
 
-    run_codex(CodexStartOptions {
-        working_directory,
-        runner_port,
-        started_by,
-        starting_mode,
-        model: args.model,
-        yolo: args.yolo,
-        resume: args.resume,
-    })
+    run_codex(
+        CodexStartOptions {
+            working_directory,
+            runner_port,
+            started_by,
+            starting_mode,
+            model: args.model,
+            yolo: args.yolo,
+            resume: args.resume,
+        },
+        &config,
+    )
     .await
 }

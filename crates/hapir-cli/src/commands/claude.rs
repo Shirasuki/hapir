@@ -1,15 +1,15 @@
-use std::env;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::Parser;
-use tracing::{debug, error};
+use std::env;
+use tracing::debug;
 
+use hapir_shared::modes::SessionMode;
 use crate::commands::common;
-use crate::modules::claude::run::{run_claude, ClaudeStartOptions};
+use crate::modules::claude::run::{ClaudeStartOptions, run_claude};
 use crate::modules::claude::version_check::check_claude_version;
 use hapir_infra::config::CliConfiguration;
 use hapir_shared::modes::PermissionMode;
 use hapir_shared::schemas::SessionStartedBy;
-use crate::agent::session_base::SessionMode;
 
 /// Parsed arguments for the claude (default) command.
 #[derive(Parser, Debug, Default)]
@@ -88,5 +88,5 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
         runner_port,
     };
 
-    run_claude(options).await
+    run_claude(options, &config).await
 }

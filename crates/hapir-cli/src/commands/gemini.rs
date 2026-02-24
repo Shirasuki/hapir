@@ -1,14 +1,14 @@
-use std::env;
-use anyhow::Result;
-use clap::Parser;
-use tracing::debug;
-use gemini::run::run_gemini;
+use hapir_shared::modes::SessionMode;
 use crate::commands::common;
-use hapir_infra::config::CliConfiguration;
 use crate::modules::gemini;
 use crate::modules::gemini::run::GeminiStartOptions;
-use crate::agent::session_base::SessionMode;
+use anyhow::Result;
+use clap::Parser;
+use gemini::run::run_gemini;
+use hapir_infra::config::CliConfiguration;
 use hapir_shared::schemas::SessionStartedBy;
+use std::env;
+use tracing::debug;
 
 /// Parsed arguments for the gemini command.
 #[derive(Parser, Debug, Default)]
@@ -50,11 +50,14 @@ pub async fn run(args: GeminiArgs) -> Result<()> {
         other => panic!("Unsupported starting mode: {}", other),
     });
 
-    run_gemini(GeminiStartOptions {
-        working_directory,
-        runner_port,
-        started_by,
-        starting_mode,
-    })
+    run_gemini(
+        GeminiStartOptions {
+            working_directory,
+            runner_port,
+            started_by,
+            starting_mode,
+        },
+        &config,
+    )
     .await
 }

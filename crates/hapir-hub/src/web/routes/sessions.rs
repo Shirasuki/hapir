@@ -1,22 +1,22 @@
 use axum::{
-    extract::{Path, State}, http::StatusCode, routing::{delete, get, patch, post},
-    Extension,
-    Json,
-    Router,
+    Extension, Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{delete, get, patch, post},
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cmp::Ordering;
 
 use hapir_shared::modes::{
-    is_model_mode_allowed_for_flavor, is_permission_mode_allowed_for_flavor, permission_modes_for_flavor, AgentFlavor,
-    ModelMode, PermissionMode,
+    AgentFlavor, ModelMode, PermissionMode, is_model_mode_allowed_for_flavor,
+    is_permission_mode_allowed_for_flavor, permission_modes_for_flavor,
 };
 use hapir_shared::session_summary::to_session_summary;
 
 use crate::sync::{ResumeSessionErrorCode, ResumeSessionResult};
-use crate::web::middleware::auth::AuthContext;
 use crate::web::AppState;
+use crate::web::middleware::auth::AuthContext;
 
 pub fn router() -> Router<AppState> {
     Router::new()

@@ -85,7 +85,7 @@ pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_dire
                         let mut response = RpcCommandResponse::default();
                         response.error = Some(e);
                         return serde_json::to_value(response).unwrap();
-                    },
+                    }
                 };
                 let timeout = req.timeout.unwrap_or(10_000);
                 debug!(cwd = %cwd, "git-status handler");
@@ -119,7 +119,7 @@ pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_dire
                         let mut response = RpcCommandResponse::default();
                         response.error = Some(e);
                         return serde_json::to_value(response).unwrap();
-                    },
+                    }
                 };
                 let timeout = req.timeout.unwrap_or(10_000);
                 let staged = req.staged.unwrap_or(false);

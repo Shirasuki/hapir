@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::outbox::SocketOutbox;
@@ -10,7 +10,7 @@ use crate::utils::time::epoch_ms;
 use futures::{SinkExt, StreamExt};
 use hapir_shared::socket::RpcRegisterRequest;
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use tokio::time;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
@@ -107,10 +107,7 @@ impl WsClient {
         )
     }
 
-    async fn flush_outbox(
-        outbox: &Mutex<SocketOutbox>,
-        tx: &mpsc::UnboundedSender<Message>,
-    ) {
+    async fn flush_outbox(outbox: &Mutex<SocketOutbox>, tx: &mpsc::UnboundedSender<Message>) {
         let mut ob = outbox.lock().await;
         for msg in ob.drain() {
             let _ = tx.send(Message::Text(msg.into()));
@@ -133,7 +130,10 @@ impl WsClient {
             }
         }
         if !handlers.is_empty() {
-            info!(count = handlers.len(), "re-registered RPC handlers on connect");
+            info!(
+                count = handlers.len(),
+                "re-registered RPC handlers on connect"
+            );
         }
     }
 
@@ -150,7 +150,9 @@ impl WsClient {
     async fn write_loop(
         mut rx: mpsc::UnboundedReceiver<Message>,
         mut sink: futures::stream::SplitSink<
-            tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
             Message,
         >,
         shutdown: &AtomicBool,
@@ -201,7 +203,9 @@ impl WsClient {
 
     async fn read_loop(
         mut stream: futures::stream::SplitStream<
-            tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
         >,
         pending: &Mutex<HashMap<String, oneshot::Sender<Value>>>,
         events: &RwLock<HashMap<String, EventHandler>>,

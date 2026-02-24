@@ -1,15 +1,15 @@
-use std::env;
 use anyhow::Result;
 use clap::Parser;
+use std::env;
 use tracing::debug;
 
+use hapir_shared::modes::SessionMode;
 use crate::commands::common;
-use hapir_infra::config::CliConfiguration;
-use opencode::run::run_opencode;
 use crate::modules::opencode;
 use crate::modules::opencode::run::OpencodeStartOptions;
-use crate::agent::session_base::SessionMode;
+use hapir_infra::config::CliConfiguration;
 use hapir_shared::schemas::SessionStartedBy;
+use opencode::run::run_opencode;
 
 /// Parsed arguments for the opencode command.
 #[derive(Parser, Debug, Default)]
@@ -51,12 +51,15 @@ pub async fn run(args: OpencodeArgs) -> Result<()> {
         other => panic!("Unsupported starting mode: {}", other),
     });
 
-    run_opencode(OpencodeStartOptions {
-        working_directory,
-        runner_port,
-        started_by,
-        starting_mode,
-        resume: args.resume,
-    })
+    run_opencode(
+        OpencodeStartOptions {
+            working_directory,
+            runner_port,
+            started_by,
+            starting_mode,
+            resume: args.resume,
+        },
+        &config,
+    )
     .await
 }

@@ -1,29 +1,31 @@
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, warn};
 
 use hapir_shared::schemas::SessionStartedBy;
 
 use super::local_launcher::claude_local_launcher;
 use super::remote_launcher::claude_remote_launcher;
-use crate::agent::loop_base::{run_local_remote_session, LoopOptions};
-use crate::agent::runner_lifecycle::{
-    create_mode_change_handler, set_controlled_by_user, RunnerLifecycle, RunnerLifecycleOptions,
+use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
+use crate::agent::cleanup::cleanup_agent_session;
+use crate::agent::common_rpc::{
+    MessagePreProcessor, register_kill_session_rpc, register_on_user_message_rpc,
+    register_set_session_config_rpc, register_switch_rpc,
 };
-use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions, SessionMode};
-use crate::agent::session_factory::{bootstrap_session, SessionBootstrapOptions};
+use crate::agent::loop_base::{LoopOptions, run_local_remote_session};
+use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions};
 use crate::modules::claude::hook_server::start_hook_server;
 use crate::modules::claude::session::ClaudeSession;
 use hapir_infra::config::CliConfiguration;
 use hapir_infra::handlers::uploads;
 use hapir_infra::utils::message_queue::MessageQueue2;
-use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
-use hapir_shared::modes::PermissionMode;
+use hapir_infra::utils::terminal::save_terminal_state;
+use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
 
 /// Options for starting a Claude session.
 #[derive(Debug, Clone)]
@@ -39,12 +41,8 @@ pub struct ClaudeStartOptions {
     pub runner_port: Option<u16>,
 }
 
-/// The enhanced mode type for Claude sessions.
-///
-/// Captures all configuration that affects how the Claude process is spawned.
-/// When any of these fields change, the mode hash changes, causing the message
-/// queue to treat subsequent messages as a new batch.
-#[derive(Debug, Clone, Default)]
+/// Mode fields that affect message queue batching for Claude sessions.
+#[derive(Debug, Clone, Default, Hash)]
 pub struct ClaudeEnhancedMode {
     pub permission_mode: Option<PermissionMode>,
     pub model: Option<String>,
@@ -55,30 +53,16 @@ pub struct ClaudeEnhancedMode {
     pub disallowed_tools: Vec<String>,
 }
 
-/// Compute a deterministic hash of the enhanced mode for queue batching.
 fn compute_mode_hash(mode: &ClaudeEnhancedMode) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(mode.permission_mode.map_or("", |p| p.as_str()));
-    hasher.update("|");
-    hasher.update(mode.model.as_deref().unwrap_or(""));
-    hasher.update("|");
-    hasher.update(mode.fallback_model.as_deref().unwrap_or(""));
-    hasher.update("|");
-    hasher.update(mode.custom_system_prompt.as_deref().unwrap_or(""));
-    hasher.update("|");
-    hasher.update(mode.append_system_prompt.as_deref().unwrap_or(""));
-    hasher.update("|");
-    hasher.update(mode.allowed_tools.join(","));
-    hasher.update("|");
-    hasher.update(mode.disallowed_tools.join(","));
-    hex::encode(hasher.finalize())
+    let mut hasher = DefaultHasher::new();
+    mode.hash(&mut hasher);
+    hasher.finish().to_string()
 }
 
-/// Entry point for running a Claude agent session.
-///
-/// Bootstraps the session, starts the hook server, creates the message
-/// queue, and enters the main local/remote loop.
-pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
+pub async fn run_claude(
+    options: ClaudeStartOptions,
+    config: &CliConfiguration,
+) -> anyhow::Result<()> {
     let working_directory = options.working_directory.clone();
 
     save_terminal_state();
@@ -94,59 +78,22 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
         working_directory, started_by, starting_mode
     );
 
-    // Bootstrap session
-    let config = CliConfiguration::new()?;
-    let bootstrap = bootstrap_session(
-        SessionBootstrapOptions {
-            flavor: "claude".to_string(),
-            started_by: Some(started_by),
-            working_directory: Some(working_directory.clone()),
-            tag: None,
-            agent_state: Some(serde_json::json!({
-                "controlledByUser": starting_mode == SessionMode::Local,
-            })),
+    let boot = bootstrap_agent(
+        AgentBootstrapConfig {
+            flavor: AgentFlavor::Claude,
+            working_directory: working_directory.clone(),
+            started_by,
+            starting_mode,
+            runner_port: options.runner_port,
+            log_tag: "runClaude",
         },
-        &config,
+        config,
     )
     .await?;
 
-    let ws_client = bootstrap.ws_client.clone();
-    let api = bootstrap.api.clone();
-    let session_id = bootstrap.session_info.id.clone();
-    let log_path = config
-        .logs_dir
-        .join(format!("{}.log", &session_id))
-        .to_string_lossy()
-        .to_string();
-
-    debug!("[runClaude] Session bootstrapped: {}", session_id);
-
-    // Notify runner that this session has started (resolves the spawn awaiter)
-    if let Some(port) = options.runner_port {
-        let pid = std::process::id();
-        if let Err(e) = hapir_runner::control_client::notify_session_started(
-            port,
-            &session_id,
-            Some(serde_json::json!({ "hostPid": pid })),
-        )
-        .await
-        {
-            warn!("[runClaude] Failed to notify runner of session start: {e}");
-        }
-    }
-
-    // Create RunnerLifecycle and register process handlers
-    let ws_for_lifecycle = ws_client.clone();
-    let lifecycle = RunnerLifecycle::new(RunnerLifecycleOptions {
-        ws_client: ws_for_lifecycle,
-        log_tag: "runClaude".to_string(),
-        stop_keep_alive: None,
-        on_before_close: None,
-        on_after_close: None,
-    });
-    lifecycle.register_process_handlers();
-
-    set_controlled_by_user(&ws_client, starting_mode).await;
+    let ws_client = boot.ws_client.clone();
+    let api = boot.api.clone();
+    let session_id = boot.session_id.clone();
 
     let initial_mode = ClaudeEnhancedMode {
         permission_mode: options.permission_mode.clone(),
@@ -155,12 +102,9 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
     };
 
     let queue = Arc::new(MessageQueue2::new(compute_mode_hash));
-
-    // Shared session mode for the hook server to check.
-    // Updated via on_mode_change_cb when the loop switches local/remote.
     let hook_session_mode = Arc::new(std::sync::Mutex::new(starting_mode));
 
-    let base_on_mode_change = create_mode_change_handler(ws_client.clone());
+    let base_on_mode_change = boot.lifecycle.create_mode_change_handler();
     let hook_mode_for_cb = hook_session_mode.clone();
     let on_mode_change: Box<dyn Fn(SessionMode) + Send + Sync> =
         Box::new(move |mode: SessionMode| {
@@ -171,7 +115,6 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
         api: api.clone(),
         ws_client: ws_client.clone(),
         path: working_directory.clone(),
-        log_path,
         session_id: None,
         queue: queue.clone(),
         on_mode_change_cb: on_mode_change,
@@ -182,12 +125,10 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
             metadata.claude_session_id = Some(sid.to_string());
             metadata
         }),
-        permission_mode: bootstrap.session_info.permission_mode,
-        model_mode: bootstrap.session_info.model_mode,
+        permission_mode: boot.permission_mode,
+        model_mode: boot.model_mode,
     });
 
-    // Start hook server for receiving Claude session notifications.
-    // Must be created after session_base so we can call on_session_found.
     let sb_for_hook = session_base.clone();
     let sb_for_thinking = session_base.clone();
     let hook_server = start_hook_server(
@@ -234,112 +175,70 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
         active_pid: Arc::new(AtomicU32::new(0)),
     });
 
-    // Register onUserMessage RPC handler
-    let queue_for_rpc = queue.clone();
     let current_mode = Arc::new(Mutex::new(initial_mode));
-    let mode_for_rpc = current_mode.clone();
-    let switch_for_msg = session_base.switch_notify.clone();
-    let hook_mode_for_rpc = hook_session_mode.clone();
-    ws_client
-        .register_rpc("on-user-message", move |params| {
-            let q = queue_for_rpc.clone();
-            let mode = mode_for_rpc.clone();
-            let switch_notify = switch_for_msg.clone();
-            let session_mode = hook_mode_for_rpc.clone();
-            Box::pin(async move {
-                info!("[runClaude] on-user-message RPC received: {:?}", params);
-                let text = params
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
 
-                // Format attachments as @path references prepended to the message
-                let attachment_refs: Vec<String> = params
-                    .get("attachments")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|a| a.get("path").and_then(|p| p.as_str()))
-                            .map(|p| format!("@{p}"))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+    // Prepend @path refs from attachments to the message text
+    let pre_process: Arc<MessagePreProcessor> = Arc::new(Box::new(|params| {
+        let text = params
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
-                let message = if attachment_refs.is_empty() {
-                    text.clone()
-                } else {
-                    let refs = attachment_refs.join(" ");
-                    if text.is_empty() {
-                        refs
-                    } else {
-                        format!("{refs}\n\n{text}")
-                    }
-                };
-
-                if message.is_empty() {
-                    return serde_json::json!({"ok": false, "reason": "empty message"});
-                }
-
-                let current = mode.lock().await.clone();
-
-                // Handle /compact and /clear as isolate-and-clear
-                let trimmed = message.trim();
-                if trimmed == "/compact" || trimmed == "/clear" {
-                    debug!(
-                        "[runClaude] Received {} command, isolate-and-clear",
-                        trimmed
-                    );
-                    q.push_isolate_and_clear(message, current).await;
-                } else {
-                    q.push(message, current).await;
-                }
-
-                // If in local mode, signal a switch to remote so the
-                // queued message gets consumed by the remote launcher.
-                let is_local = *session_mode.lock().unwrap() == SessionMode::Local;
-                if is_local {
-                    info!(
-                        "[runClaude] Local mode: web message received, requesting switch to remote"
-                    );
-                    switch_notify.notify_one();
-                }
-
-                serde_json::json!({"ok": true})
+        let attachment_refs: Vec<String> = params
+            .get("attachments")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a.get("path").and_then(|p| p.as_str()))
+                    .map(|p| format!("@{p}"))
+                    .collect()
             })
-        })
+            .unwrap_or_default();
+
+        if attachment_refs.is_empty() {
+            text
+        } else {
+            let refs = attachment_refs.join(" ");
+            if text.is_empty() {
+                refs
+            } else {
+                format!("{refs}\n\n{text}")
+            }
+        }
+    }));
+
+    register_on_user_message_rpc(
+        &ws_client,
+        queue.clone(),
+        current_mode.clone(),
+        Some(session_base.switch_notify.clone()),
+        Some(hook_session_mode.clone()),
+        "runClaude",
+        Some(pre_process),
+    )
+    .await;
+
+    let apply_config: Arc<crate::agent::common_rpc::ApplyConfigFn<ClaudeEnhancedMode>> =
+        Arc::new(Box::new(|m, params| {
+            if let Some(pm) = params.get("permissionMode") {
+                if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
+                    debug!("[runClaude] Permission mode changed to: {:?}", mode);
+                    m.permission_mode = Some(mode);
+                }
+            }
+            if let Some(mm) = params.get("modelMode").and_then(|v| v.as_str()) {
+                debug!("[runClaude] Model mode changed to: {}", mm);
+                m.model = Some(mm.to_string());
+            }
+        }));
+    register_set_session_config_rpc(&ws_client, current_mode.clone(), apply_config, "runClaude")
         .await;
 
-    // Register set-session-config RPC handler
-    let mode_for_config = current_mode.clone();
-    let queue_for_config = queue.clone();
-    ws_client
-        .register_rpc("set-session-config", move |params| {
-            let mode = mode_for_config.clone();
-            let _q = queue_for_config.clone();
-            Box::pin(async move {
-                let mut m = mode.lock().await;
-                if let Some(pm) = params.get("permissionMode") {
-                    if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
-                        debug!("[runClaude] Permission mode changed to: {:?}", mode);
-                        m.permission_mode = Some(mode);
-                    }
-                }
-                if let Some(mm) = params.get("modelMode").and_then(|v| v.as_str()) {
-                    debug!("[runClaude] Model mode changed to: {}", mm);
-                    m.model = Some(mm.to_string());
-                }
-                serde_json::json!({
-                    "applied": {
-                        "permissionMode": m.permission_mode,
-                        "modelMode": m.model,
-                    }
-                })
-            })
-        })
-        .await;
+    register_kill_session_rpc(&ws_client, queue.clone(), None, "runClaude").await;
+    register_switch_rpc(&ws_client, session_base.switch_notify.clone(), "runClaude").await;
 
-    // Register permission RPC handler
+    // Permission responses are delivered via oneshot channels from pending_permissions
     let cs_for_permission = claude_session.clone();
     ws_client
         .register_rpc("permission", move |params| {
@@ -354,11 +253,9 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
                     .unwrap_or(false);
                 let updated_input = params.get("updatedInput").cloned();
 
-                // Find and respond to pending permission
                 if let Some(tx) = cs.pending_permissions.lock().await.remove(id) {
                     let _ = tx.send((approved, updated_input));
 
-                    // Update agent state to move request to completedRequests
                     let id_clone = id.to_string();
                     let status = if approved { "approved" } else { "denied" };
                     let completed_at = std::time::SystemTime::now()
@@ -370,12 +267,10 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
                         .base
                         .ws_client
                         .update_agent_state(move |mut state| {
-                            // Remove from requests
                             if let Some(requests) =
                                 state.get_mut("requests").and_then(|v| v.as_object_mut())
                                 && let Some(request) = requests.remove(&id_clone)
                             {
-                                // Add to completedRequests
                                 let completed_requests = state
                                     .get_mut("completedRequests")
                                     .and_then(|v| v.as_object_mut())
@@ -406,20 +301,7 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
         })
         .await;
 
-    // Register killSession RPC handler (hub calls this to terminate the session)
-    let queue_for_kill = queue.clone();
-    ws_client
-        .register_rpc("killSession", move |_params| {
-            let q = queue_for_kill.clone();
-            Box::pin(async move {
-                debug!("[runClaude] killSession RPC received, closing queue");
-                q.close().await;
-                serde_json::json!({"ok": true})
-            })
-        })
-        .await;
-
-    // Register abort RPC handler (hub calls this to interrupt the current turn)
+    // Abort kills the active Claude process by PID rather than using an ACP cancel
     let cs_for_abort = claude_session.clone();
     ws_client
         .register_rpc("abort", move |_params| {
@@ -447,28 +329,11 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
         })
         .await;
 
-    // Register switch RPC handler (hub calls this to switch local↔remote)
-    let switch_for_rpc = session_base.switch_notify.clone();
-    ws_client
-        .register_rpc("switch", move |_params| {
-            let switch_notify = switch_for_rpc.clone();
-            Box::pin(async move {
-                info!("[runClaude] switch RPC received, requesting mode switch");
-                switch_notify.notify_one();
-                serde_json::json!({"ok": true})
-            })
-        })
-        .await;
-
-    // Set up terminal manager
     let terminal_mgr =
         crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
 
-    // All RPC handlers registered — now connect the WebSocket.
-    // This ensures the hub receives all rpc-register events before session-alive.
-    ws_client.connect(Duration::from_secs(10)).await;
+    let _ = ws_client.connect(Duration::from_secs(10)).await;
 
-    // Create LoopOptions and enter the main loop
     let cs_for_local = claude_session.clone();
     let cs_for_remote = claude_session.clone();
 
@@ -489,10 +354,8 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
     })
     .await;
 
-    // Handle exit
     debug!("[runClaude] Main loop exited");
 
-    // Check for local launch failure
     let failure = claude_session.local_launch_failure.lock().await.take();
     if let Some(failure) = failure {
         warn!(
@@ -508,33 +371,18 @@ pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
             .await;
     }
 
-    // Stop hook server and clean up settings file
     hook_server.stop();
     if let Err(e) = std::fs::remove_file(&claude_session.hook_settings_path) {
         debug!("[runClaude] Failed to remove hook settings file: {}", e);
     }
 
-    // Clean up upload directory
     uploads::cleanup_upload_dir(&session_id).await;
 
-    // Close all terminals
-    terminal_mgr.close_all().await;
-
-    // Cleanup lifecycle
-    lifecycle.cleanup().await;
-
-    restore_terminal_state();
-
-    if let Err(e) = loop_result {
-        error!("[runClaude] Loop error: {}", e);
-        lifecycle.mark_crash(&e.to_string()).await;
-    }
+    cleanup_agent_session(loop_result, terminal_mgr, boot.lifecycle, true, "runClaude").await;
 
     Ok(())
 }
 
-/// Write the hook settings JSON file that `claude --settings <path>` reads.
-/// Returns the path to the written file.
 fn write_hook_settings(session_id: &str, hook_port: u16, hook_token: &str) -> String {
     let hook_settings_path = format!(
         "{}/.hapir/hook-settings/{}.json",
@@ -546,8 +394,6 @@ fn write_hook_settings(session_id: &str, hook_port: u16, hook_token: &str) -> St
     let mut exe_path = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "hapir".to_string());
-    // On Windows the path uses backslashes which get eaten by bash as escape
-    // characters. Convert to forward slashes so the hook command works in bash.
     if cfg!(windows) {
         exe_path = exe_path.replace('\\', "/");
     }
@@ -593,7 +439,7 @@ fn write_hook_settings(session_id: &str, hook_port: u16, hook_token: &str) -> St
             ]
         }
     });
-    if let Some(parent) = Path::new(&hook_settings_path).parent() {
+    if let Some(parent) = std::path::Path::new(&hook_settings_path).parent() {
         std::fs::create_dir_all(parent).ok();
     }
     match std::fs::write(&hook_settings_path, settings_json.to_string()) {

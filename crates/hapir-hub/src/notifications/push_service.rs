@@ -1,15 +1,15 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::config::VapidKeys;
+use crate::store::Store;
+use crate::store::push_subscriptions;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use url::Url;
-use crate::config::VapidKeys;
-use crate::store::Store;
-use crate::store::push_subscriptions;
 
 /// Payload for a push notification.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
-use crate::agent::session_base::{AgentSessionBase, SessionMode};
+use crate::agent::session_base::AgentSessionBase;
+use hapir_shared::modes::SessionMode;
 use hapir_shared::schemas::SessionStartedBy;
 use serde_json::Value;
 use tokio::sync::Mutex;

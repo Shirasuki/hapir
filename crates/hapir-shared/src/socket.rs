@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::modes::{ModelMode, PermissionMode, SessionMode};
 use crate::schemas::{HapirMachineMetadata, HapirSessionMetadata};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,8 +41,11 @@ pub struct SessionAliveRequest {
     pub thinking: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_status: Option<String>,
-    pub mode: String,
-    pub runtime: String,
+    pub mode: SessionMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<PermissionMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_mode: Option<ModelMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

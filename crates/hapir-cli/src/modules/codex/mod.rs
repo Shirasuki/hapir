@@ -1,10 +1,11 @@
 use hapir_shared::modes::PermissionMode;
-use sha2::{Digest, Sha256};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
-mod session_scanner;
 pub mod run;
+mod session_scanner;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Hash)]
 pub struct CodexMode {
     pub permission_mode: Option<PermissionMode>,
     pub model: Option<String>,
@@ -12,11 +13,7 @@ pub struct CodexMode {
 }
 
 fn compute_mode_hash(mode: &CodexMode) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(mode.permission_mode.map_or("", |p| p.as_str()));
-    hasher.update("|");
-    hasher.update(mode.model.as_deref().unwrap_or(""));
-    hasher.update("|");
-    hasher.update(mode.collaboration_mode.as_deref().unwrap_or(""));
-    hex::encode(hasher.finalize())
+    let mut hasher = DefaultHasher::new();
+    mode.hash(&mut hasher);
+    hasher.finish().to_string()
 }

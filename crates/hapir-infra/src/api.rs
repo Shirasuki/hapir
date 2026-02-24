@@ -6,7 +6,9 @@ use hapir_shared::schemas::cli_api::{
     CreateMachineRequest, CreateMachineResponse, CreateSessionRequest, CreateSessionResponse,
     ListMessagesResponse,
 };
-use hapir_shared::schemas::{HapirSessionMetadata, Session, MachineRunnerState, HapirMachineMetadata};
+use hapir_shared::schemas::{
+    HapirMachineMetadata, HapirSessionMetadata, MachineRunnerState, Session,
+};
 
 use crate::config::CliConfiguration;
 

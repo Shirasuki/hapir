@@ -4,7 +4,9 @@ use hapir_shared::modes::{ModelMode, PermissionMode};
 use hapir_shared::rpc::bash::RpcCommandResponse;
 use hapir_shared::rpc::directories::{RpcListDirectoryRequest, RpcListDirectoryResponse};
 use hapir_shared::rpc::files::{RpcReadFileRequest, RpcReadFileResponse};
-use hapir_shared::rpc::git::{RpcGitDiffFileRequest, RpcGitDiffNumstatRequest, RpcGitStatusRequest};
+use hapir_shared::rpc::git::{
+    RpcGitDiffFileRequest, RpcGitDiffNumstatRequest, RpcGitStatusRequest,
+};
 use hapir_shared::rpc::ripgrep::RpcRipgrepRequest;
 use hapir_shared::rpc::uploads::{
     RpcDeleteUploadRequest, RpcDeleteUploadResponse, RpcUploadFileRequest, RpcUploadFileResponse,
@@ -321,7 +323,10 @@ impl RpcGateway {
         session_id: &str,
         cwd: Option<&str>,
     ) -> anyhow::Result<RpcCommandResponse> {
-        let req = RpcGitStatusRequest { cwd: cwd.map(Into::into), ..Default::default() };
+        let req = RpcGitStatusRequest {
+            cwd: cwd.map(Into::into),
+            ..Default::default()
+        };
         let val = self
             .session_rpc(session_id, "git-status", serde_json::to_value(req)?)
             .await?;
@@ -334,7 +339,11 @@ impl RpcGateway {
         cwd: Option<&str>,
         staged: Option<bool>,
     ) -> anyhow::Result<RpcCommandResponse> {
-        let req = RpcGitDiffNumstatRequest { cwd: cwd.map(Into::into), staged, ..Default::default() };
+        let req = RpcGitDiffNumstatRequest {
+            cwd: cwd.map(Into::into),
+            staged,
+            ..Default::default()
+        };
         let val = self
             .session_rpc(session_id, "git-diff-numstat", serde_json::to_value(req)?)
             .await?;
@@ -425,7 +434,10 @@ impl RpcGateway {
         args: &[String],
         cwd: Option<&str>,
     ) -> anyhow::Result<RpcCommandResponse> {
-        let req = RpcRipgrepRequest { args: args.to_vec(), cwd: cwd.map(Into::into) };
+        let req = RpcRipgrepRequest {
+            args: args.to_vec(),
+            cwd: cwd.map(Into::into),
+        };
         let val = self
             .session_rpc(session_id, "ripgrep", serde_json::to_value(req)?)
             .await?;

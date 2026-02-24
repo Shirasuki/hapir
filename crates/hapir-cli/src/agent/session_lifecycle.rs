@@ -1,16 +1,18 @@
-use std::process;
-use std::sync::Arc;
-
-use tokio::sync::Mutex;
-use tracing::debug;
+use hapir_shared::modes::SessionMode;
 use hapir_infra::utils::terminal::restore_terminal_state;
 use hapir_infra::ws::session_client::WsSessionClient;
+use std::pin::Pin;
+use std::process;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
+use tracing::{debug, error};
 
-type AsyncClosureFn =
-    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync;
+type AsyncClosureFn = dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync;
 
-/// Options for creating a RunnerLifecycle.
-pub struct RunnerLifecycleOptions {
+/// Options for creating a AgentSessionLifecycle.
+pub struct AgentSessionLifecycleOptions {
     pub ws_client: Arc<WsSessionClient>,
     pub log_tag: String,
     pub stop_keep_alive: Option<Box<dyn Fn() + Send + Sync>>,
@@ -19,10 +21,10 @@ pub struct RunnerLifecycleOptions {
 }
 
 /// Manages the lifecycle of a runner process: exit codes, archiving, cleanup, signal handling.
-pub struct RunnerLifecycle {
-    exit_code: Arc<Mutex<i32>>,
-    archive_reason: Arc<Mutex<String>>,
-    cleanup_started: Arc<Mutex<bool>>,
+pub struct AgentSessionLifecycle {
+    exit_code: AtomicI32,
+    archive_reason: Mutex<String>,
+    cleanup_started: AtomicBool,
     ws_client: Arc<WsSessionClient>,
     log_tag: String,
     stop_keep_alive: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -30,12 +32,12 @@ pub struct RunnerLifecycle {
     on_after_close: Option<Arc<AsyncClosureFn>>,
 }
 
-impl RunnerLifecycle {
-    pub fn new(opts: RunnerLifecycleOptions) -> Arc<Self> {
+impl AgentSessionLifecycle {
+    pub fn new(opts: AgentSessionLifecycleOptions) -> Arc<Self> {
         Arc::new(Self {
-            exit_code: Arc::new(Mutex::new(0)),
-            archive_reason: Arc::new(Mutex::new("User terminated".to_string())),
-            cleanup_started: Arc::new(Mutex::new(false)),
+            exit_code: AtomicI32::new(0),
+            archive_reason: Mutex::new("User terminated".to_string()),
+            cleanup_started: AtomicBool::new(false),
             ws_client: opts.ws_client,
             log_tag: opts.log_tag,
             stop_keep_alive: opts.stop_keep_alive.map(Arc::from),
@@ -44,23 +46,25 @@ impl RunnerLifecycle {
         })
     }
 
-    pub async fn set_exit_code(&self, code: i32) {
-        *self.exit_code.lock().await = code;
+    pub fn set_exit_code(&self, code: i32) {
+        self.exit_code.store(code, Ordering::Relaxed);
     }
 
     pub async fn set_archive_reason(&self, reason: &str) {
         *self.archive_reason.lock().await = reason.to_string();
     }
+
     pub async fn mark_crash(&self, error: &str) {
-        debug!("[{}] Unhandled error: {}", self.log_tag, error);
-        *self.exit_code.lock().await = 1;
-        *self.archive_reason.lock().await = "Session crashed".to_string();
+        error!("[{}] Unhandled error: {}", self.log_tag, error);
+        self.set_exit_code(1);
+        self.set_archive_reason(&format!("Session crashed: {}", error))
+            .await;
     }
 
     async fn archive_and_close(&self) {
         let reason = self.archive_reason.lock().await.clone();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as f64;
 
@@ -80,12 +84,12 @@ impl RunnerLifecycle {
     }
 
     pub async fn cleanup(&self) {
+        if self
+            .cleanup_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
         {
-            let mut started = self.cleanup_started.lock().await;
-            if *started {
-                return;
-            }
-            *started = true;
+            return;
         }
 
         debug!("[{}] Cleanup start", self.log_tag);
@@ -105,16 +109,17 @@ impl RunnerLifecycle {
         if let Some(ref after) = self.on_after_close {
             after().await;
         }
+
+        restore_terminal_state();
     }
 
     pub async fn cleanup_and_exit(&self, code_override: Option<i32>) {
         if let Some(code) = code_override {
-            *self.exit_code.lock().await = code;
+            self.exit_code.store(code, Ordering::Relaxed);
         }
 
         self.cleanup().await;
-        restore_terminal_state();
-        let code = *self.exit_code.lock().await;
+        let code = self.exit_code.load(Ordering::Relaxed);
         process::exit(code);
     }
 
@@ -151,30 +156,25 @@ impl RunnerLifecycle {
             }
         });
     }
-}
 
-/// Set the `controlledByUser` flag on the agent state based on mode.
-pub async fn set_controlled_by_user(
-    ws_client: &WsSessionClient,
-    mode: super::session_base::SessionMode,
-) {
-    let controlled = mode == super::session_base::SessionMode::Local;
-    let _ = ws_client
-        .update_agent_state(move |mut state| {
-            state["controlledByUser"] = serde_json::json!(controlled);
-            state
+    pub async fn set_controlled_by_user(&self, mode: SessionMode) {
+        let controlled = mode == SessionMode::Local;
+        let _ = self
+            .ws_client
+            .update_agent_state(move |mut state| {
+                state["controlledByUser"] = serde_json::json!(controlled);
+                state
+            })
+            .await;
+    }
+
+    pub fn create_mode_change_handler(self: &Arc<Self>) -> Box<dyn Fn(SessionMode) + Send + Sync> {
+        let lifecycle = self.clone();
+        Box::new(move |mode| {
+            let lc = lifecycle.clone();
+            tokio::spawn(async move {
+                lc.set_controlled_by_user(mode).await;
+            });
         })
-        .await;
-}
-
-/// Create a mode-change handler that updates controlledByUser on the agent state.
-pub fn create_mode_change_handler(
-    ws_client: Arc<WsSessionClient>,
-) -> Box<dyn Fn(super::session_base::SessionMode) + Send + Sync> {
-    Box::new(move |mode| {
-        let client = ws_client.clone();
-        tokio::spawn(async move {
-            set_controlled_by_user(&client, mode).await;
-        });
-    })
+    }
 }

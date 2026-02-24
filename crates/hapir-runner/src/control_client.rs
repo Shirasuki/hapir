@@ -201,14 +201,14 @@ pub async fn is_runner_running_current_version(
 pub async fn notify_session_started(
     port: u16,
     session_id: &str,
-    metadata: Option<serde_json::Value>,
+    metadata: Option<SessionStartedMetadata>,
 ) -> Result<()> {
     let client = http_client();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/session-started"))
         .json(&SessionStartedPayload {
             session_id: session_id.to_string(),
-            metadata,
+            metadata: metadata.map(|m| serde_json::to_value(m).unwrap()),
         })
         .send()
         .await?;

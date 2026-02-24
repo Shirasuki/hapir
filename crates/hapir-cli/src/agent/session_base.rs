@@ -1,49 +1,30 @@
 use std::sync::Arc;
 
+use arc_swap::ArcSwapOption;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 use tracing::debug;
 
-use hapir_shared::modes::{ModelMode, PermissionMode};
+use hapir_shared::modes::{ModelMode, PermissionMode, SessionMode};
 
 use hapir_infra::api::ApiClient;
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::ws::session_client::WsSessionClient;
-
-/// The local/remote mode of the session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionMode {
-    Local,
-    Remote,
-}
-
-impl SessionMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Remote => "remote",
-        }
-    }
-}
-
-/// Callback invoked when a session ID is discovered.
-pub type SessionFoundCallback = Box<dyn Fn(&str) + Send + Sync>;
+use hapir_shared::schemas::HapirSessionMetadata;
 
 /// Callback invoked when the mode changes.
 pub type ModeChangeCallback = Box<dyn Fn(SessionMode) + Send + Sync>;
 
 /// Applies a session ID to metadata (flavor-specific).
-pub type ApplySessionIdFn = Box<
-    dyn Fn(hapir_shared::schemas::HapirSessionMetadata, &str) -> hapir_shared::schemas::HapirSessionMetadata + Send + Sync,
->;
+pub type ApplySessionIdFn =
+    Box<dyn Fn(HapirSessionMetadata, &str) -> HapirSessionMetadata + Send + Sync>;
 
 /// Options for constructing an AgentSessionBase.
 pub struct AgentSessionBaseOptions<Mode: Clone + Send + 'static> {
     pub api: Arc<ApiClient>,
     pub ws_client: Arc<WsSessionClient>,
     pub path: String,
-    pub log_path: String,
     pub session_id: Option<String>,
     pub queue: Arc<MessageQueue2<Mode>>,
     pub on_mode_change_cb: ModeChangeCallback,
@@ -59,7 +40,6 @@ pub struct AgentSessionBaseOptions<Mode: Clone + Send + 'static> {
 /// and session-found callbacks. Parameterized over the queue's Mode type.
 pub struct AgentSessionBase<Mode: Clone + Send + 'static> {
     pub path: String,
-    pub log_path: String,
     pub session_id: Arc<Mutex<Option<String>>>,
     pub mode: Arc<Mutex<SessionMode>>,
     pub thinking: Arc<Mutex<bool>>,
@@ -68,12 +48,11 @@ pub struct AgentSessionBase<Mode: Clone + Send + 'static> {
     pub ws_client: Arc<WsSessionClient>,
     pub queue: Arc<MessageQueue2<Mode>>,
 
-    session_found_callbacks: Arc<Mutex<Vec<SessionFoundCallback>>>,
     on_mode_change_cb: Arc<ModeChangeCallback>,
     apply_session_id_to_metadata: Arc<ApplySessionIdFn>,
     session_label: String,
     session_id_label: String,
-    keep_alive_handle: std::sync::Mutex<Option<JoinHandle<()>>>,
+    keep_alive_handle: ArcSwapOption<JoinHandle<()>>,
     permission_mode: Arc<Mutex<Option<PermissionMode>>>,
     model_mode: Arc<Mutex<Option<ModelMode>>>,
     /// Signalled to request a mode switch (local↔remote).
@@ -85,7 +64,6 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
     pub fn new(opts: AgentSessionBaseOptions<Mode>) -> Arc<Self> {
         let session = Arc::new(Self {
             path: opts.path,
-            log_path: opts.log_path,
             session_id: Arc::new(Mutex::new(opts.session_id)),
             mode: Arc::new(Mutex::new(opts.mode)),
             thinking: Arc::new(Mutex::new(false)),
@@ -93,12 +71,11 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
             api: opts.api,
             ws_client: opts.ws_client,
             queue: opts.queue,
-            session_found_callbacks: Arc::new(Mutex::new(Vec::new())),
             on_mode_change_cb: Arc::new(opts.on_mode_change_cb),
             apply_session_id_to_metadata: Arc::new(opts.apply_session_id_to_metadata),
             session_label: opts.session_label,
             session_id_label: opts.session_id_label,
-            keep_alive_handle: std::sync::Mutex::new(None),
+            keep_alive_handle: ArcSwapOption::empty(),
             permission_mode: Arc::new(Mutex::new(opts.permission_mode)),
             model_mode: Arc::new(Mutex::new(opts.model_mode)),
             switch_notify: Arc::new(Notify::new()),
@@ -117,7 +94,7 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
         });
 
         // Store the handle so we can cancel later
-        *session.keep_alive_handle.lock().unwrap() = Some(handle);
+        session.keep_alive_handle.store(Some(Arc::new(handle)));
 
         session
     }
@@ -125,31 +102,12 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
     async fn send_keep_alive(&self) {
         let thinking = *self.thinking.lock().await;
         let thinking_status = self.thinking_status.lock().await.clone();
-        let mode = self.mode.lock().await.as_str().to_string();
-        let runtime = self.get_keep_alive_runtime().await;
-        self.ws_client
-            .keep_alive(thinking, thinking_status.as_deref(), &mode, &runtime)
-            .await;
-    }
-
-    async fn get_keep_alive_runtime(&self) -> String {
+        let mode = *self.mode.lock().await;
         let pm = *self.permission_mode.lock().await;
         let mm = *self.model_mode.lock().await;
-        if pm.is_none() && mm.is_none() {
-            return String::new();
-        }
-        let mut obj = serde_json::Map::new();
-        if let Some(pm) = pm
-            && let Ok(v) = serde_json::to_value(pm)
-        {
-            obj.insert("permissionMode".to_string(), v);
-        }
-        if let Some(mm) = mm
-            && let Ok(v) = serde_json::to_value(mm)
-        {
-            obj.insert("modelMode".to_string(), v);
-        }
-        serde_json::Value::Object(obj).to_string()
+        self.ws_client
+            .keep_alive(thinking, thinking_status.as_deref(), mode, pm, mm)
+            .await;
     }
 
     /// Called when the thinking state changes.
@@ -199,22 +157,11 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
             "[{}] {} session ID {} added to metadata",
             session_label, label, session_id
         );
-
-        let callbacks = self.session_found_callbacks.lock().await;
-        for cb in callbacks.iter() {
-            cb(session_id);
-        }
-    }
-
-    /// Register a callback for when a session ID is found.
-    pub async fn add_session_found_callback(&self, callback: SessionFoundCallback) {
-        self.session_found_callbacks.lock().await.push(callback);
     }
 
     /// Stop the keep-alive interval.
     pub fn stop_keep_alive(&self) {
-        let mut handle = self.keep_alive_handle.lock().unwrap();
-        if let Some(h) = handle.take() {
+        if let Some(h) = self.keep_alive_handle.swap(None) {
             h.abort();
         }
     }

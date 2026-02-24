@@ -81,6 +81,13 @@ pub struct SessionStartedPayload {
     pub metadata: Option<Value>,
 }
 
+/// Metadata sent with the session-started webhook.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStartedMetadata {
+    pub host_pid: u32,
+}
+
 /// Stop session request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

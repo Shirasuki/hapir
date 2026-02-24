@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tracing::debug;
 
+use hapir_shared::modes::AgentFlavor;
 use hapir_shared::schemas::{HapirSessionMetadata, Session, SessionStartedBy};
 
 use hapir_infra::api::ApiClient;
@@ -14,7 +15,7 @@ use hapir_infra::ws::session_client::WsSessionClient;
 
 /// Options for bootstrapping a session.
 pub struct SessionBootstrapOptions {
-    pub flavor: String,
+    pub flavor: AgentFlavor,
     pub started_by: Option<SessionStartedBy>,
     pub working_directory: Option<String>,
     pub tag: Option<String>,
@@ -34,7 +35,7 @@ pub struct SessionBootstrapResult {
 
 /// Build session metadata for a new session.
 pub fn build_session_metadata(
-    flavor: &str,
+    flavor: AgentFlavor,
     started_by: SessionStartedBy,
     working_directory: &str,
     machine_id: &str,
@@ -81,7 +82,7 @@ pub fn build_session_metadata(
         lifecycle_state_since: Some(now),
         archived_by: None,
         archive_reason: None,
-        flavor: Some(flavor.to_string()),
+        flavor: Some(flavor.as_str().to_string()),
         worktree: None,
     }
 }
@@ -121,7 +122,7 @@ pub async fn bootstrap_session(
         .await?;
 
     let metadata = build_session_metadata(
-        &opts.flavor,
+        opts.flavor,
         started_by,
         &working_directory,
         &machine_id,

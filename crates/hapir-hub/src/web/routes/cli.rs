@@ -43,9 +43,9 @@ async fn create_session(
         .await
     {
         Ok(session) => (
-                StatusCode::OK,
-                Json(serde_json::to_value(CreateSessionResponse { session }).unwrap()),
-            ),
+            StatusCode::OK,
+            Json(serde_json::to_value(CreateSessionResponse { session }).unwrap()),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
@@ -149,11 +149,14 @@ async fn create_machine(
         .await
     {
         Ok(machine) => (
-                StatusCode::OK,
-                Json(serde_json::to_value(CreateMachineResponse {
+            StatusCode::OK,
+            Json(
+                serde_json::to_value(CreateMachineResponse {
                     machine: serde_json::to_value(machine).unwrap(),
-                }).unwrap()),
+                })
+                .unwrap(),
             ),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),

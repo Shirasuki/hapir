@@ -1,11 +1,11 @@
 //! Shared request/response types for the CLI HTTP API (`/cli/*` routes).
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use crate::schemas::HapirMachineMetadata;
 use super::machine::MachineRunnerState;
 use super::message::DecryptedMessage;
 use super::session::Session;
+use crate::schemas::HapirMachineMetadata;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

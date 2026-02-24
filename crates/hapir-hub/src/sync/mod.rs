@@ -19,7 +19,9 @@ use hapir_shared::rpc::bash::RpcCommandResponse;
 use hapir_shared::rpc::directories::RpcListDirectoryResponse;
 use hapir_shared::rpc::files::RpcReadFileResponse;
 use hapir_shared::rpc::uploads::{RpcDeleteUploadResponse, RpcUploadFileResponse};
-use hapir_shared::schemas::{AttachmentMetadata, DecryptedMessage, HapirMachineMetadata, Session, SyncEvent};
+use hapir_shared::schemas::{
+    AttachmentMetadata, DecryptedMessage, HapirMachineMetadata, Session, SyncEvent,
+};
 use machine_cache::{Machine, MachineCache};
 use message_service::{MessageService, MessagesPageResult};
 use rpc_gateway::{RpcGateway, RpcTransport};

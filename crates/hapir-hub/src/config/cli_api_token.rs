@@ -1,8 +1,8 @@
 use super::settings::write_settings;
 use super::{CliApiTokenSource, Settings};
 use anyhow::Result;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use std::path::Path;
 use tracing::warn;
 

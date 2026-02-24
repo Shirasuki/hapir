@@ -1,20 +1,22 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
-use hapir_shared::modes::PermissionMode;
+use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
 use hapir_shared::schemas::SessionStartedBy;
 
+use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
+use crate::agent::cleanup::cleanup_agent_session;
+use crate::agent::common_rpc::{
+    register_acp_abort_rpc, register_kill_session_rpc, register_on_user_message_rpc,
+    register_set_session_config_rpc,
+};
 use crate::agent::local_launch_policy::{
     LocalLaunchContext, LocalLaunchExitReason, get_local_launch_exit_reason,
 };
 use crate::agent::loop_base::{LoopOptions, LoopResult, run_local_remote_session};
-use crate::agent::runner_lifecycle::{
-    RunnerLifecycle, RunnerLifecycleOptions, create_mode_change_handler, set_controlled_by_user,
-};
-use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions, SessionMode};
-use crate::agent::session_factory::{SessionBootstrapOptions, bootstrap_session};
+use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions};
 use hapir_acp::acp_sdk::backend::AcpSdkBackend;
 use hapir_acp::types::{AgentBackend, AgentMessage, AgentSessionConfig, PromptContent};
 use hapir_infra::config::CliConfiguration;
@@ -23,7 +25,6 @@ use hapir_infra::ws::session_client::WsSessionClient;
 
 use super::{OpencodeMode, compute_mode_hash};
 
-/// Forward an `AgentMessage` from the ACP backend to the WebSocket session.
 async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
     match msg {
         AgentMessage::Text { text } => {
@@ -77,14 +78,9 @@ async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
     }
 }
 
-/// Local launcher for OpenCode.
 async fn opencode_local_launcher(session: &Arc<AgentSessionBase<OpencodeMode>>) -> LoopResult {
     let working_directory = session.path.clone();
     debug!("[opencodeLocalLauncher] Starting in {}", working_directory);
-
-    // TODO: Implement local message sync for OpenCode
-    // - Create OpencodeSessionScanner that scans `~/.local/share/opencode/storage/` JSON files
-    // - Use LocalSyncDriver::start(scanner, ws_client, Duration::from_secs(2), "opencodeLocalSync")
 
     let mut cmd = tokio::process::Command::new("opencode");
     cmd.current_dir(&working_directory);
@@ -117,7 +113,7 @@ async fn opencode_local_launcher(session: &Arc<AgentSessionBase<OpencodeMode>>) 
         LocalLaunchExitReason::Exit => LoopResult::Exit,
     }
 }
-/// Remote launcher for OpenCode using ACP protocol.
+
 async fn opencode_remote_launcher(
     session: &Arc<AgentSessionBase<OpencodeMode>>,
     backend: &Arc<AcpSdkBackend>,
@@ -177,7 +173,6 @@ async fn opencode_remote_launcher(
         };
 
         let prompt = batch.message;
-
         debug!(
             "[opencodeRemoteLauncher] Processing message: {}",
             if prompt.len() > 100 {
@@ -216,6 +211,7 @@ async fn opencode_remote_launcher(
         }
     }
 }
+
 pub struct OpencodeStartOptions {
     pub working_directory: String,
     pub runner_port: Option<u16>,
@@ -224,9 +220,10 @@ pub struct OpencodeStartOptions {
     pub resume: Option<String>,
 }
 
-/// Entry point for running an OpenCode agent session.
-pub async fn run_opencode(options: OpencodeStartOptions) -> anyhow::Result<()> {
-    let working_directory = options.working_directory;
+pub async fn run_opencode(
+    options: OpencodeStartOptions,
+    config: &CliConfiguration,
+) -> anyhow::Result<()> {
     let started_by = options.started_by;
     let starting_mode = options.starting_mode.unwrap_or(match started_by {
         SessionStartedBy::Terminal => SessionMode::Local,
@@ -235,67 +232,33 @@ pub async fn run_opencode(options: OpencodeStartOptions) -> anyhow::Result<()> {
 
     debug!(
         "[runOpenCode] Starting in {} (startedBy={:?}, mode={:?})",
-        working_directory, started_by, starting_mode
+        options.working_directory, started_by, starting_mode
     );
 
-    let config = CliConfiguration::new()?;
-    let bootstrap = bootstrap_session(
-        SessionBootstrapOptions {
-            flavor: "opencode".to_string(),
-            started_by: Some(started_by),
-            working_directory: Some(working_directory.clone()),
-            tag: None,
-            agent_state: Some(serde_json::json!({
-                "controlledByUser": starting_mode == SessionMode::Local,
-            })),
+    let boot = bootstrap_agent(
+        AgentBootstrapConfig {
+            flavor: AgentFlavor::Opencode,
+            working_directory: options.working_directory.clone(),
+            started_by,
+            starting_mode,
+            runner_port: options.runner_port,
+            log_tag: "runOpenCode",
         },
-        &config,
+        config,
     )
     .await?;
 
-    let ws_client = bootstrap.ws_client.clone();
-    let api = bootstrap.api.clone();
-    let session_id = bootstrap.session_info.id.clone();
-    let log_path = config
-        .logs_dir
-        .join(format!("{}.log", &session_id))
-        .to_string_lossy()
-        .to_string();
+    let ws_client = boot.ws_client.clone();
+    let working_directory = options.working_directory;
 
-    debug!("[runOpenCode] Session bootstrapped: {}", session_id);
-
-    if let Some(port) = options.runner_port {
-        let pid = std::process::id();
-        if let Err(e) = hapir_runner::control_client::notify_session_started(
-            port,
-            &session_id,
-            Some(serde_json::json!({ "hostPid": pid })),
-        )
-        .await
-        {
-            tracing::warn!("[runOpenCode] Failed to notify runner of session start: {e}");
-        }
-    }
-
-    let lifecycle = RunnerLifecycle::new(RunnerLifecycleOptions {
-        ws_client: ws_client.clone(),
-        log_tag: "runOpenCode".to_string(),
-        stop_keep_alive: None,
-        on_before_close: None,
-        on_after_close: None,
-    });
-    lifecycle.register_process_handlers();
-
-    set_controlled_by_user(&ws_client, starting_mode).await;
-    let initial_mode = OpencodeMode::default();
     let queue = Arc::new(MessageQueue2::new(compute_mode_hash));
+    let current_mode = Arc::new(Mutex::new(OpencodeMode::default()));
 
-    let on_mode_change = create_mode_change_handler(ws_client.clone());
+    let on_mode_change = boot.lifecycle.create_mode_change_handler();
     let session_base = AgentSessionBase::new(AgentSessionBaseOptions {
-        api: api.clone(),
+        api: boot.api.clone(),
         ws_client: ws_client.clone(),
         path: working_directory.clone(),
-        log_path,
         session_id: None,
         queue: queue.clone(),
         on_mode_change_cb: on_mode_change,
@@ -306,11 +269,10 @@ pub async fn run_opencode(options: OpencodeStartOptions) -> anyhow::Result<()> {
             metadata.opencode_session_id = Some(sid.to_string());
             metadata
         }),
-        permission_mode: bootstrap.session_info.permission_mode,
-        model_mode: bootstrap.session_info.model_mode,
+        permission_mode: boot.permission_mode,
+        model_mode: boot.model_mode,
     });
 
-    // Create ACP backend for OpenCode
     let backend = Arc::new(AcpSdkBackend::new(
         "opencode".to_string(),
         vec![
@@ -321,96 +283,55 @@ pub async fn run_opencode(options: OpencodeStartOptions) -> anyhow::Result<()> {
         None,
     ));
 
-    // Register on-user-message RPC handler
-    let queue_for_rpc = queue.clone();
-    let current_mode = Arc::new(Mutex::new(initial_mode));
-    let mode_for_rpc = current_mode.clone();
-    ws_client
-        .register_rpc("on-user-message", move |params| {
-            let q = queue_for_rpc.clone();
-            let mode = mode_for_rpc.clone();
-            Box::pin(async move {
-                let message = params
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+    register_on_user_message_rpc(
+        &ws_client,
+        queue.clone(),
+        current_mode.clone(),
+        None,
+        None,
+        "runOpenCode",
+        None,
+    )
+    .await;
 
-                if message.is_empty() {
-                    return serde_json::json!({"ok": false, "reason": "empty message"});
+    let apply_config: Arc<crate::agent::common_rpc::ApplyConfigFn<OpencodeMode>> =
+        Arc::new(Box::new(|m, params| {
+            if let Some(pm) = params.get("permissionMode") {
+                if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
+                    debug!("[runOpenCode] Permission mode changed to: {:?}", mode);
+                    m.permission_mode = Some(mode);
                 }
+            }
+        }));
+    register_set_session_config_rpc(
+        &ws_client,
+        current_mode.clone(),
+        apply_config,
+        "runOpenCode",
+    )
+    .await;
 
-                let current = mode.lock().await.clone();
-
-                let trimmed = message.trim();
-                if trimmed == "/compact" || trimmed == "/clear" {
-                    debug!("[runOpenCode] Received {} command", trimmed);
-                    q.push_isolate_and_clear(message, current).await;
-                } else {
-                    q.push(message, current).await;
-                }
-
-                serde_json::json!({"ok": true})
-            })
-        })
-        .await;
-    // Register set-session-config RPC handler
-    let mode_for_config = current_mode.clone();
-    ws_client
-        .register_rpc("set-session-config", move |params| {
-            let mode = mode_for_config.clone();
-            Box::pin(async move {
-                let mut m = mode.lock().await;
-                if let Some(pm) = params.get("permissionMode") {
-                    if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
-                        debug!("[runOpenCode] Permission mode changed to: {:?}", mode);
-                        m.permission_mode = Some(mode);
-                    }
-                }
-                serde_json::json!({"ok": true})
-            })
-        })
-        .await;
-
-    // Register killSession RPC handler
-    let queue_for_kill = queue.clone();
     let backend_for_kill = backend.clone();
-    ws_client
-        .register_rpc("killSession", move |_params| {
-            let q = queue_for_kill.clone();
-            let b = backend_for_kill.clone();
-            Box::pin(async move {
-                debug!("[runOpenCode] killSession RPC received");
-                q.close().await;
-                let _ = b.disconnect().await;
-                serde_json::json!({"ok": true})
-            })
+    let on_kill: crate::agent::common_rpc::OnKillFn = Arc::new(move || {
+        let b = backend_for_kill.clone();
+        Box::pin(async move {
+            let _ = b.disconnect().await;
         })
-        .await;
+    });
+    register_kill_session_rpc(&ws_client, queue.clone(), Some(on_kill), "runOpenCode").await;
 
-    // Register abort RPC handler
-    let backend_for_abort = backend.clone();
-    let sb_for_abort = session_base.clone();
-    ws_client
-        .register_rpc("abort", move |_params| {
-            let b = backend_for_abort.clone();
-            let sb = sb_for_abort.clone();
-            Box::pin(async move {
-                debug!("[runOpenCode] abort RPC received");
-                if let Some(sid) = sb.session_id.lock().await.clone() {
-                    let _ = b.cancel_prompt(&sid).await;
-                }
-                sb.on_thinking_change(false).await;
-                serde_json::json!({"ok": true})
-            })
-        })
-        .await;
+    register_acp_abort_rpc(
+        &ws_client,
+        backend.clone() as Arc<dyn AgentBackend>,
+        session_base.clone(),
+        "runOpenCode",
+    )
+    .await;
 
-    // Set up terminal manager
     let terminal_mgr =
-        crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
+        crate::terminal::setup_terminal(&ws_client, &boot.session_id, &working_directory).await;
 
-    ws_client.connect(Duration::from_secs(10)).await;
+    let _ = ws_client.connect(Duration::from_secs(10)).await;
 
     let sb_for_local = session_base.clone();
     let sb_for_remote = session_base.clone();
@@ -434,15 +355,15 @@ pub async fn run_opencode(options: OpencodeStartOptions) -> anyhow::Result<()> {
     })
     .await;
 
-    debug!("[runOpenCode] Main loop exited");
     let _ = backend.disconnect().await;
-    terminal_mgr.close_all().await;
-    lifecycle.cleanup().await;
-
-    if let Err(e) = loop_result {
-        error!("[runOpenCode] Loop error: {}", e);
-        lifecycle.mark_crash(&e.to_string()).await;
-    }
+    cleanup_agent_session(
+        loop_result,
+        terminal_mgr,
+        boot.lifecycle,
+        false,
+        "runOpenCode",
+    )
+    .await;
 
     Ok(())
 }

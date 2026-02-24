@@ -99,8 +99,7 @@ impl CodexSessionScanner {
         self.session_meta_parsed.insert(path.clone());
 
         if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-            self.session_id_by_file
-                .insert(path.clone(), id.to_string());
+            self.session_id_by_file.insert(path.clone(), id.to_string());
         }
         if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
             self.session_cwd_by_file

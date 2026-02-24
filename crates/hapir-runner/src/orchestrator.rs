@@ -7,6 +7,7 @@ use hapir_infra::handlers;
 use hapir_infra::persistence;
 use hapir_infra::rpc::RpcRegistry;
 use hapir_infra::utils::machine::build_machine_metadata;
+use hapir_infra::utils::process::spawn_runner_background;
 use hapir_infra::ws::machine_client::WsMachineClient;
 use hapir_shared::schemas::{MachineRunnerState, MachineRunnerStatus};
 use serde_json::json;
@@ -14,7 +15,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
-use hapir_infra::utils::process::spawn_runner_background;
 
 /// Get the mtime of the current CLI executable in milliseconds.
 pub fn get_cli_mtime_ms() -> Option<i64> {

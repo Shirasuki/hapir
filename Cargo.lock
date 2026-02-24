@@ -983,6 +983,7 @@ name = "hapir-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "atty",
  "axum",
  "chrono",
@@ -999,7 +1000,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
  "uuid",
