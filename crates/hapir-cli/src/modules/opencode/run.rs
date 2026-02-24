@@ -3,6 +3,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
 
+use hapir_shared::modes::PermissionMode;
 use hapir_shared::schemas::SessionStartedBy;
 
 use crate::agent::local_launch_policy::{
@@ -342,9 +343,11 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
             let mode = mode_for_config.clone();
             Box::pin(async move {
                 let mut m = mode.lock().await;
-                if let Some(pm) = params.get("permissionMode").and_then(|v| v.as_str()) {
-                    debug!("[runOpenCode] Permission mode changed to: {}", pm);
-                    m.permission_mode = Some(pm.to_string());
+                if let Some(pm) = params.get("permissionMode") {
+                    if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
+                        debug!("[runOpenCode] Permission mode changed to: {:?}", mode);
+                        m.permission_mode = Some(mode);
+                    }
                 }
                 serde_json::json!({"ok": true})
             })

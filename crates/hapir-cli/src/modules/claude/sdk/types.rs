@@ -1,3 +1,4 @@
+use hapir_shared::modes::PermissionMode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -127,7 +128,7 @@ pub struct QueryOptions {
     pub custom_system_prompt: Option<String>,
     pub append_system_prompt: Option<String>,
     pub max_turns: Option<u32>,
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
     pub additional_directories: Vec<String>,

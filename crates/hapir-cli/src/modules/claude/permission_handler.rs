@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use hapir_shared::modes::PermissionMode;
 use tracing::debug;
 
 /// Stub permission handler for Claude sessions.
@@ -12,7 +13,7 @@ pub struct PermissionHandler {
     allowed_tools: HashSet<String>,
     allowed_bash_literals: HashSet<String>,
     allowed_bash_prefixes: HashSet<String>,
-    permission_mode: String,
+    permission_mode: PermissionMode,
 }
 
 struct TrackedToolCall {
@@ -42,12 +43,12 @@ impl PermissionHandler {
             allowed_tools: HashSet::new(),
             allowed_bash_literals: HashSet::new(),
             allowed_bash_prefixes: HashSet::new(),
-            permission_mode: "default".to_string(),
+            permission_mode: PermissionMode::Default,
         }
     }
 
-    pub fn handle_mode_change(&mut self, mode: &str) {
-        self.permission_mode = mode.to_string();
+    pub fn handle_mode_change(&mut self, mode: PermissionMode) {
+        self.permission_mode = mode;
     }
 
     /// Reset all state for new sessions.

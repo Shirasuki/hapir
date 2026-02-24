@@ -5,6 +5,7 @@ use tokio::select;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
+use hapir_shared::modes::PermissionMode;
 use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
 
 use crate::agent::local_launch_policy::{
@@ -286,9 +287,11 @@ pub async fn run(
             let mode = mode_for_config.clone();
             Box::pin(async move {
                 let mut m = mode.lock().await;
-                if let Some(pm) = params.get("permissionMode").and_then(|v| v.as_str()) {
-                    debug!("[runCodex] Permission mode changed to: {}", pm);
-                    m.permission_mode = Some(pm.to_string());
+                if let Some(pm) = params.get("permissionMode") {
+                    if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
+                        debug!("[runCodex] Permission mode changed to: {:?}", mode);
+                        m.permission_mode = Some(mode);
+                    }
                 }
                 if let Some(cm) = params.get("collaborationMode").and_then(|v| v.as_str()) {
                     debug!("[runCodex] Collaboration mode changed to: {}", cm);

@@ -25,8 +25,12 @@ pub fn initialize_token(config: &mut CliConfiguration) -> Result<()> {
     }
 
     eprintln!("No API token found. Please enter your CLI_API_TOKEN.");
+    let settings_hint = dirs_next::home_dir()
+        .map(|h| h.join(".hapir").join("settings.json").display().to_string())
+        .unwrap_or_else(|| "~/.hapir/settings.json".to_string());
     eprintln!(
-        "(You can find it in the hub server startup logs or ~/.hapir/settings.json on the server)"
+        "(You can find it in the hub server startup logs or {} on the server)",
+        settings_hint
     );
     eprint!("CLI_API_TOKEN: ");
     io::stderr().flush()?;

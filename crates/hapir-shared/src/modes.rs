@@ -97,6 +97,18 @@ pub const OPENCODE_PERMISSION_MODES: &[PermissionMode] =
 pub const MODEL_MODES: &[ModelMode] = &[ModelMode::Default, ModelMode::Sonnet, ModelMode::Opus];
 
 impl PermissionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::AcceptEdits => "acceptEdits",
+            Self::BypassPermissions => "bypassPermissions",
+            Self::Plan => "plan",
+            Self::ReadOnly => "read-only",
+            Self::SafeYolo => "safe-yolo",
+            Self::Yolo => "yolo",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Default => "Default",

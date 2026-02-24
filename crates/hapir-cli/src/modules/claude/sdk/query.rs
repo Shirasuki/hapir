@@ -162,7 +162,7 @@ fn build_common_args(options: &QueryOptions) -> Vec<String> {
     }
     if let Some(ref pm) = options.permission_mode {
         args.push("--permission-mode".to_string());
-        args.push(pm.clone());
+        args.push(pm.as_str().to_string());
     }
     if let Some(ref fm) = options.fallback_model {
         args.push("--fallback-model".to_string());

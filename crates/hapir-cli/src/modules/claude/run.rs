@@ -23,12 +23,13 @@ use hapir_infra::config::CliConfiguration;
 use hapir_infra::handlers::uploads;
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
+use hapir_shared::modes::PermissionMode;
 
 /// Options for starting a Claude session.
 #[derive(Debug, Clone, Default)]
 pub struct StartOptions {
     pub model: Option<String>,
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
     pub starting_mode: Option<String>,
     pub should_start_runner: Option<bool>,
     pub claude_env_vars: Option<HashMap<String, String>>,
@@ -44,7 +45,7 @@ pub struct StartOptions {
 /// queue to treat subsequent messages as a new batch.
 #[derive(Debug, Clone, Default)]
 pub struct EnhancedMode {
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub fallback_model: Option<String>,
     pub custom_system_prompt: Option<String>,
@@ -56,7 +57,7 @@ pub struct EnhancedMode {
 /// Compute a deterministic hash of the enhanced mode for queue batching.
 fn compute_mode_hash(mode: &EnhancedMode) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(mode.permission_mode.as_deref().unwrap_or(""));
+    hasher.update(mode.permission_mode.map_or("", |p| p.as_str()));
     hasher.update("|");
     hasher.update(mode.model.as_deref().unwrap_or(""));
     hasher.update("|");
@@ -330,9 +331,11 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
             let _q = queue_for_config.clone();
             Box::pin(async move {
                 let mut m = mode.lock().await;
-                if let Some(pm) = params.get("permissionMode").and_then(|v| v.as_str()) {
-                    debug!("[runClaude] Permission mode changed to: {}", pm);
-                    m.permission_mode = Some(pm.to_string());
+                if let Some(pm) = params.get("permissionMode") {
+                    if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
+                        debug!("[runClaude] Permission mode changed to: {:?}", mode);
+                        m.permission_mode = Some(mode);
+                    }
                 }
                 if let Some(mm) = params.get("modelMode").and_then(|v| v.as_str()) {
                     debug!("[runClaude] Model mode changed to: {}", mm);

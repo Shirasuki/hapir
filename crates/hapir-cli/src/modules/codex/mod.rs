@@ -1,3 +1,4 @@
+use hapir_shared::modes::PermissionMode;
 use sha2::{Digest, Sha256};
 
 mod session_scanner;
@@ -5,14 +6,14 @@ pub mod run;
 
 #[derive(Debug, Clone, Default)]
 pub struct CodexMode {
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub collaboration_mode: Option<String>,
 }
 
 fn compute_mode_hash(mode: &CodexMode) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(mode.permission_mode.as_deref().unwrap_or(""));
+    hasher.update(mode.permission_mode.map_or("", |p| p.as_str()));
     hasher.update("|");
     hasher.update(mode.model.as_deref().unwrap_or(""));
     hasher.update("|");
