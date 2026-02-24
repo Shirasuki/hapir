@@ -1,4 +1,5 @@
-use super::settings::{read_settings, settings_file_path, write_settings};
+use super::settings::write_settings;
+use crate::config::Settings;
 use anyhow::Result;
 use std::path::Path;
 
@@ -35,10 +36,10 @@ fn derive_cors_origins(public_url: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn load_server_settings(data_dir: &Path) -> Result<ServerSettingsResult> {
-    let settings_path = settings_file_path(data_dir);
-    let mut settings = read_settings(&settings_path)?
-        .ok_or_else(|| anyhow::anyhow!("cannot read settings file"))?;
+pub fn load_server_settings(
+    settings: &mut Settings,
+    settings_path: &Path,
+) -> Result<ServerSettingsResult> {
     let mut needs_save = false;
 
     // telegram_bot_token

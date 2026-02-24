@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 
 use hapir_shared::schemas::SyncEvent;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{error, trace, warn};
 
@@ -10,20 +11,15 @@ use crate::sync::SyncEngine;
 use super::event_parsing::extract_message_event_type;
 use super::push_channel::NotificationChannel;
 
-/// Internal mutable state for the NotificationHub, protected by a std::sync::Mutex.
 struct HubState {
     last_known_requests: HashMap<String, HashSet<String>>,
     notification_debounce: HashMap<String, JoinHandle<()>>,
     last_ready_notification: HashMap<String, i64>,
 }
 
-/// Orchestrates notification delivery across all registered channels.
-///
-/// Subscribes to `SyncEngine`'s broadcast channel and processes events to
-/// trigger notifications (permission requests and agent-ready signals).
 pub struct NotificationHub {
     channels: Vec<Arc<dyn NotificationChannel>>,
-    state: StdMutex<HubState>,
+    state: Mutex<HubState>,
     ready_cooldown_ms: i64,
     permission_debounce_ms: u64,
 }
@@ -36,7 +32,7 @@ impl NotificationHub {
     ) -> Self {
         Self {
             channels,
-            state: StdMutex::new(HubState {
+            state: Mutex::new(HubState {
                 last_known_requests: HashMap::new(),
                 notification_debounce: HashMap::new(),
                 last_ready_notification: HashMap::new(),
@@ -80,18 +76,19 @@ impl NotificationHub {
             | SyncEvent::SessionAdded { session_id, .. } => {
                 let session = sync_engine.get_session(session_id).await;
                 let Some(session) = session else {
-                    self.clear_session_state(session_id);
+                    self.clear_session_state(session_id).await;
                     return;
                 };
                 if !session.active {
-                    self.clear_session_state(session_id);
+                    self.clear_session_state(session_id).await;
                     return;
                 }
-                self.check_for_permission_notification(&session, sync_engine);
+                self.check_for_permission_notification(&session, sync_engine)
+                    .await;
             }
 
             SyncEvent::SessionRemoved { session_id, .. } => {
-                self.clear_session_state(session_id);
+                self.clear_session_state(session_id).await;
             }
 
             SyncEvent::MessageReceived {
@@ -109,8 +106,8 @@ impl NotificationHub {
         }
     }
 
-    fn clear_session_state(&self, session_id: &str) {
-        let mut state = self.state.lock().unwrap();
+    async fn clear_session_state(&self, session_id: &str) {
+        let mut state = self.state.lock().await;
         if let Some(handle) = state.notification_debounce.remove(session_id) {
             handle.abort();
         }
@@ -118,7 +115,7 @@ impl NotificationHub {
         state.last_ready_notification.remove(session_id);
     }
 
-    fn check_for_permission_notification(
+    async fn check_for_permission_notification(
         &self,
         session: &hapir_shared::schemas::Session,
         sync_engine: &Arc<SyncEngine>,
@@ -135,7 +132,7 @@ impl NotificationHub {
         let new_request_ids: HashSet<String> = requests.keys().cloned().collect();
 
         let has_new_requests = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().await;
             let old_request_ids = state
                 .last_known_requests
                 .get(&session.id)
@@ -157,16 +154,14 @@ impl NotificationHub {
             return;
         }
 
-        // Debounce: cancel any existing timer and start a new one
         let session_id = session.id.clone();
         let session_id_for_map = session_id.clone();
         let debounce_ms = self.permission_debounce_ms;
         let channels = self.channels.clone();
         let engine = sync_engine.clone();
 
-        // Cancel existing debounce timer
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().await;
             if let Some(handle) = state.notification_debounce.remove(&session_id) {
                 handle.abort();
             }
@@ -175,7 +170,6 @@ impl NotificationHub {
         let handle = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(debounce_ms)).await;
 
-            // Re-fetch the session to ensure it's still valid
             let session = engine.get_session(&session_id).await;
 
             let Some(session) = session else {
@@ -185,7 +179,6 @@ impl NotificationHub {
                 return;
             }
 
-            // Send permission notification to all channels
             for channel in &channels {
                 if let Err(e) = channel.send_permission_request(&session).await {
                     error!(
@@ -197,9 +190,8 @@ impl NotificationHub {
             }
         });
 
-        // Store the handle
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().await;
             state
                 .notification_debounce
                 .insert(session_id_for_map, handle);
@@ -223,7 +215,7 @@ impl NotificationHub {
             .as_millis() as i64;
 
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().await;
             let last = state
                 .last_ready_notification
                 .get(session_id)
@@ -252,7 +244,7 @@ impl NotificationHub {
 
 impl Drop for NotificationHub {
     fn drop(&mut self) {
-        let state = self.state.get_mut().unwrap();
+        let state = self.state.get_mut();
         for (_, handle) in state.notification_debounce.drain() {
             handle.abort();
         }

@@ -1,8 +1,8 @@
-use super::CliApiTokenSource;
-use super::settings::{read_settings, settings_file_path, write_settings};
+use super::settings::write_settings;
+use super::{CliApiTokenSource, Settings};
 use anyhow::Result;
-use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use std::path::Path;
 use tracing::warn;
 
@@ -45,9 +45,10 @@ fn is_weak_token(token: &str) -> bool {
 }
 
 /// Get or create CLI API token. Priority: env > file > generate.
-pub fn get_or_create_cli_api_token(data_dir: &Path) -> Result<CliApiTokenResult> {
-    let settings_path = settings_file_path(data_dir);
-
+pub fn get_or_create_cli_api_token(
+    settings: &mut Settings,
+    settings_path: &Path,
+) -> Result<CliApiTokenResult> {
     // Check env
     if let Ok(env_token) = std::env::var("CLI_API_TOKEN")
         && !env_token.is_empty()
@@ -57,9 +58,7 @@ pub fn get_or_create_cli_api_token(data_dir: &Path) -> Result<CliApiTokenResult>
             warn!("CLI_API_TOKEN appears to be weak");
         }
         // Persist to file if not already saved
-        if let Ok(Some(mut settings)) = read_settings(&settings_path)
-            && settings.cli_api_token.is_none()
-        {
+        if settings.cli_api_token.is_none() {
             settings.cli_api_token = Some(token.clone());
             let _ = write_settings(&settings_path, &settings);
         }
@@ -71,9 +70,7 @@ pub fn get_or_create_cli_api_token(data_dir: &Path) -> Result<CliApiTokenResult>
     }
 
     // Check file
-    if let Ok(Some(settings)) = read_settings(&settings_path)
-        && let Some(ref file_token) = settings.cli_api_token
-    {
+    if let Some(ref file_token) = settings.cli_api_token {
         let token = strip_namespace_suffix(file_token);
         return Ok(CliApiTokenResult {
             token,
@@ -84,14 +81,8 @@ pub fn get_or_create_cli_api_token(data_dir: &Path) -> Result<CliApiTokenResult>
 
     // Generate
     let token = generate_secure_token();
-    if let Ok(Some(mut settings)) = read_settings(&settings_path) {
-        settings.cli_api_token = Some(token.clone());
-        let _ = write_settings(&settings_path, &settings);
-    } else {
-        let mut settings = super::settings::Settings::default();
-        settings.cli_api_token = Some(token.clone());
-        let _ = write_settings(&settings_path, &settings);
-    }
+    settings.cli_api_token = Some(token.clone());
+    let _ = write_settings(&settings_path, &settings);
 
     Ok(CliApiTokenResult {
         token,

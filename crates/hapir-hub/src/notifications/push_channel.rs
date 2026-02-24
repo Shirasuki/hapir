@@ -29,20 +29,16 @@ pub trait NotificationChannel: Send + Sync {
 pub struct PushNotificationChannel {
     push_service: Arc<PushService>,
     sync_engine: Arc<SyncEngine>,
-    #[allow(dead_code)]
-    app_url: String,
 }
 
 impl PushNotificationChannel {
     pub fn new(
         push_service: Arc<PushService>,
         sync_engine: Arc<SyncEngine>,
-        app_url: String,
     ) -> Self {
         Self {
             push_service,
             sync_engine,
-            app_url,
         }
     }
 

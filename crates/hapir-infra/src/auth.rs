@@ -1,5 +1,5 @@
 use crate::api::ApiClient;
-use crate::config::Configuration;
+use crate::config::CliConfiguration;
 use crate::persistence;
 use crate::utils::machine::build_machine_metadata;
 use anyhow::{Context, Result};
@@ -10,7 +10,7 @@ use uuid::Uuid;
 /// Register (or confirm) the machine with the hub API, optionally sending
 /// initial runner state. Returns the machine_id.
 pub async fn auth_and_setup_machine_with_state(
-    config: &Configuration,
+    config: &CliConfiguration,
     runner_state: Option<&MachineRunnerState>,
 ) -> Result<String> {
     let api = ApiClient::new(config)?;

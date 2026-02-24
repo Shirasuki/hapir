@@ -43,13 +43,8 @@ pub struct VapidKeys {
     pub private_key: String,
 }
 
-pub fn settings_file_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("settings.json")
-}
-
-/// Read settings from file. Returns `Ok(Some(Settings::default()))` if file
-/// doesn't exist. Returns `Err` if the file exists but cannot be parsed (to
-/// avoid silent data loss).
+/// 从文件读取配置。文件不存在时返回 `Ok(Some(Settings::default()))`；
+/// 文件存在但解析失败时返回 `Err`，避免静默丢失数据。
 pub fn read_settings(path: &Path) -> Result<Option<Settings>> {
     if !path.exists() {
         return Ok(Some(Settings::default()));

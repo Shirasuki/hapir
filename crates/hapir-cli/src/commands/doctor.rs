@@ -1,8 +1,8 @@
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 use hapir_infra::persistence;
 
 pub fn run() -> anyhow::Result<()> {
-    let config = Configuration::new()?;
+    let config = CliConfiguration::new()?;
     let settings = persistence::read_settings(&config.settings_file)?;
 
     println!("HAPIR Doctor\n");

@@ -8,7 +8,7 @@ use hapir_shared::schemas::cli_api::{
 };
 use hapir_shared::schemas::{HapirSessionMetadata, Session, MachineRunnerState, HapirMachineMetadata};
 
-use crate::config::Configuration;
+use crate::config::CliConfiguration;
 
 /// CLI/Runner 侧的 Hub HTTP API 客户端。
 ///
@@ -24,7 +24,7 @@ pub struct ApiClient {
 
 impl ApiClient {
     /// 从配置构造客户端，要求 `cli_api_token` 非空。
-    pub fn new(config: &Configuration) -> Result<Self> {
+    pub fn new(config: &CliConfiguration) -> Result<Self> {
         if config.cli_api_token.is_empty() {
             bail!(
                 "CLI_API_TOKEN is required. Run 'hapir auth login' or set the CLI_API_TOKEN environment variable."

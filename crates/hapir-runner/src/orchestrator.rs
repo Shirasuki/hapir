@@ -2,7 +2,7 @@ use crate::control_server;
 use crate::types::ShutdownSource;
 use control_server::RunnerState;
 use hapir_infra::auth;
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 use hapir_infra::handlers;
 use hapir_infra::persistence;
 use hapir_infra::rpc::RpcRegistry;
@@ -28,7 +28,7 @@ pub fn get_cli_mtime_ms() -> Option<i64> {
     Some(ms)
 }
 
-pub async fn start_sync(config: &Configuration) -> anyhow::Result<()> {
+pub async fn start_sync(config: &CliConfiguration) -> anyhow::Result<()> {
     // Startup malfunction timeout
     let malfunction_handle = tokio::spawn(async {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -269,7 +269,7 @@ pub async fn start_sync(config: &Configuration) -> anyhow::Result<()> {
 
 /// Connect to the hub via WebSocket, register RPC handlers, and send initial state.
 async fn connect_to_hub(
-    config: &Configuration,
+    config: &CliConfiguration,
     http_port: u16,
     start_time_ms: i64,
     runner_state: &RunnerState,

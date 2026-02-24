@@ -28,8 +28,8 @@ use tokio::sync::mpsc::unbounded_channel;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-const DEFAULT_MAX_TERMINALS: usize = 4;
-const DEFAULT_IDLE_TIMEOUT_MS: u64 = 15 * 60_000;
+pub(crate) const DEFAULT_MAX_TERMINALS: usize = 4;
+pub(crate) const DEFAULT_IDLE_TIMEOUT_MS: u64 = 15 * 60_000;
 
 /// Shared state for WebSocket handlers.
 #[derive(Clone)]

@@ -1,12 +1,12 @@
 use anyhow::bail;
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 use hapir_infra::persistence;
 use hapir_infra::utils::process::spawn_runner_background;
 use crate::control_client;
 use crate::orchestrator;
 
 pub async fn run(action: Option<&str>) -> anyhow::Result<()> {
-    let config = Configuration::new()?;
+    let config = CliConfiguration::new()?;
     match action {
         Some("start") => start_background(&config).await,
         Some("start-sync") => orchestrator::start_sync(&config).await,
@@ -21,7 +21,7 @@ pub async fn run(action: Option<&str>) -> anyhow::Result<()> {
     }
 }
 
-async fn start_background(config: &Configuration) -> anyhow::Result<()> {
+async fn start_background(config: &CliConfiguration) -> anyhow::Result<()> {
     if config.cli_api_token.is_empty() {
         bail!(
             "CLI_API_TOKEN is not configured. Run 'hapir auth login' or set the CLI_API_TOKEN environment variable."
@@ -42,7 +42,7 @@ async fn start_background(config: &Configuration) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn stop(config: &Configuration) -> anyhow::Result<()> {
+async fn stop(config: &CliConfiguration) -> anyhow::Result<()> {
     match control_client::check_runner_alive(&config.runner_state_file, &config.runner_lock_file)
         .await
     {
@@ -57,7 +57,7 @@ async fn stop(config: &Configuration) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn status(config: &Configuration) -> anyhow::Result<()> {
+async fn status(config: &CliConfiguration) -> anyhow::Result<()> {
     match control_client::check_runner_alive(&config.runner_state_file, &config.runner_lock_file)
         .await
     {
@@ -80,7 +80,7 @@ async fn status(config: &Configuration) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn list(config: &Configuration) -> anyhow::Result<()> {
+async fn list(config: &CliConfiguration) -> anyhow::Result<()> {
     match control_client::check_runner_alive(&config.runner_state_file, &config.runner_lock_file)
         .await
     {
@@ -105,7 +105,7 @@ async fn list(config: &Configuration) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn show_logs(config: &Configuration) -> anyhow::Result<()> {
+fn show_logs(config: &CliConfiguration) -> anyhow::Result<()> {
     if let Some(state) = persistence::read_runner_state(&config.runner_state_file)
         && let Some(ref log_path) = state.runner_log_path
     {

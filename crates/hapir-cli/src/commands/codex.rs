@@ -3,7 +3,7 @@ use clap::Parser;
 use tracing::debug;
 
 use crate::commands::common;
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 
 /// Parsed arguments for the codex command.
 #[derive(Parser, Debug, Default)]
@@ -33,7 +33,7 @@ pub struct CodexArgs {
 pub async fn run(args: CodexArgs) -> Result<()> {
     debug!(?args, "codex command starting");
 
-    let mut config = Configuration::new()?;
+    let mut config = CliConfiguration::new()?;
     let runner_port = common::full_init(&mut config).await?;
 
     let working_directory = std::env::current_dir()?.to_string_lossy().to_string();

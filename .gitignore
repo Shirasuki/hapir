@@ -19,6 +19,7 @@ CLAUDE.md
 AGENTS.md
 /.codex
 /.ai
+plan.md
 
 /crates/hapi-shared/bindings/
 /web/node_modules/

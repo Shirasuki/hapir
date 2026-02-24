@@ -22,7 +22,7 @@ use hapir_acp::codex_app_server::backend::CodexAppServerBackend;
 use hapir_acp::types::{
     AgentBackend, AgentMessage, AgentSessionConfig, PermissionResponse, PromptContent,
 };
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
 use hapir_infra::ws::session_client::WsSessionClient;
@@ -150,7 +150,7 @@ pub async fn run(
         working_directory, started_by, starting_mode
     );
 
-    let config = Configuration::new()?;
+    let config = CliConfiguration::new()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "codex".to_string(),

@@ -13,6 +13,14 @@ pub struct TerminalEntry {
     pub last_activity: Instant,
 }
 
+/// drain_idle 返回的待发送通知。
+pub struct IdleTerminalAction {
+    pub socket_id: String,
+    pub cli_socket_id: String,
+    pub err_msg: String,
+    pub close_msg: String,
+}
+
 pub struct TerminalRegistry {
     terminals: HashMap<String, TerminalEntry>,
     by_socket: HashMap<String, HashSet<String>>,
@@ -124,6 +132,37 @@ impl TerminalRegistry {
             .filter(|(_, e)| now.duration_since(e.last_activity) > self.idle_timeout)
             .map(|(id, _)| id.clone())
             .collect()
+    }
+
+    /// 收集超时的终端，移除并返回需要发送的通知消息。
+    pub fn drain_idle(&mut self) -> Vec<IdleTerminalAction> {
+        let idle_ids = self.collect_idle();
+        let mut actions = Vec::new();
+        for terminal_id in idle_ids {
+            if let Some(entry) = self.remove(&terminal_id) {
+                actions.push(IdleTerminalAction {
+                    socket_id: entry.socket_id,
+                    cli_socket_id: entry.cli_socket_id,
+                    err_msg: serde_json::json!({
+                        "event": "terminal:error",
+                        "data": {
+                            "terminalId": entry.terminal_id,
+                            "message": "Terminal closed due to inactivity."
+                        }
+                    })
+                    .to_string(),
+                    close_msg: serde_json::json!({
+                        "event": "terminal:close",
+                        "data": {
+                            "sessionId": entry.session_id,
+                            "terminalId": entry.terminal_id
+                        }
+                    })
+                    .to_string(),
+                });
+            }
+        }
+        actions
     }
 
     fn remove_from_index(

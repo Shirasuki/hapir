@@ -1,11 +1,10 @@
-use super::settings::{VapidKeys, read_settings, settings_file_path, write_settings};
+use super::settings::{VapidKeys, read_settings, write_settings};
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use std::path::Path;
 
-pub fn get_or_create_vapid_keys(data_dir: &Path) -> Result<VapidKeys> {
-    let settings_path = settings_file_path(data_dir);
+pub fn get_or_create_vapid_keys(settings_path: &Path) -> Result<VapidKeys> {
     if let Ok(Some(ref settings)) = read_settings(&settings_path)
         && let Some(ref keys) = settings.vapid_keys
         && !keys.public_key.is_empty()

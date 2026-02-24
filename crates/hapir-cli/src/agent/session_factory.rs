@@ -7,7 +7,7 @@ use tracing::debug;
 use hapir_shared::schemas::{HapirSessionMetadata, Session, SessionStartedBy};
 
 use hapir_infra::api::ApiClient;
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 use hapir_infra::persistence;
 use hapir_infra::utils::machine::{build_machine_metadata, gethostname};
 use hapir_infra::ws::session_client::WsSessionClient;
@@ -38,7 +38,7 @@ pub fn build_session_metadata(
     started_by: SessionStartedBy,
     working_directory: &str,
     machine_id: &str,
-    config: &Configuration,
+    config: &CliConfiguration,
 ) -> HapirSessionMetadata {
     let hostname = gethostname().to_string_lossy().to_string();
     let home_dir = dirs_next::home_dir()
@@ -89,7 +89,7 @@ pub fn build_session_metadata(
 // PLACEHOLDER_REST
 
 /// Read the machine ID from settings, or bail.
-fn get_machine_id(config: &Configuration) -> anyhow::Result<String> {
+fn get_machine_id(config: &CliConfiguration) -> anyhow::Result<String> {
     let settings = persistence::read_settings(&config.settings_file)?;
     settings.machine_id.ok_or_else(|| {
         anyhow::anyhow!("No machine ID found in settings. Run 'hapir auth login' first.")
@@ -99,7 +99,7 @@ fn get_machine_id(config: &Configuration) -> anyhow::Result<String> {
 /// Bootstrap a session: create machine, create session, connect WS client.
 pub async fn bootstrap_session(
     opts: SessionBootstrapOptions,
-    config: &Configuration,
+    config: &CliConfiguration,
 ) -> anyhow::Result<SessionBootstrapResult> {
     let working_directory = opts.working_directory.unwrap_or_else(|| {
         std::env::current_dir()

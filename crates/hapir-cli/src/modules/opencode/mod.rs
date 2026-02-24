@@ -17,7 +17,7 @@ use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions, Sess
 use crate::agent::session_factory::{SessionBootstrapOptions, bootstrap_session};
 use hapir_acp::acp_sdk::backend::AcpSdkBackend;
 use hapir_acp::types::{AgentBackend, AgentMessage, AgentSessionConfig, PromptContent};
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::ws::session_client::WsSessionClient;
 
@@ -231,7 +231,7 @@ async fn opencode_remote_launcher(
 pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::Result<()> {
     debug!("[runOpenCode] Starting in {}", working_directory);
 
-    let config = Configuration::new()?;
+    let config = CliConfiguration::new()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "opencode".to_string(),

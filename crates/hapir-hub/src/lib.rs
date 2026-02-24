@@ -6,24 +6,189 @@ pub mod telegram;
 pub mod web;
 pub mod ws;
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+
+use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, RwLock};
-use tracing::info;
+use tokio::task::JoinHandle;
+use tracing::{info, warn};
 
-use config::Configuration;
+use config::{HubConfiguration, VapidKeys};
 use store::Store;
 use sync::SyncEngine;
+use telegram::bot::HappyBot;
 use web::AppState;
 use ws::WsState;
 use ws::connection_manager::ConnectionManager;
 use ws::terminal_registry::TerminalRegistry;
 
-pub async fn run_hub() -> anyhow::Result<()> {
-    // Load configuration
-    let config = Configuration::create().await?;
+const SESSION_EXPIRE_INTERVAL: Duration = Duration::from_secs(5);
+const TERMINAL_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+struct HubCore {
+    config: HubConfiguration,
+    store: Arc<Store>,
+    jwt_secret: Vec<u8>,
+    vapid_keys: Option<VapidKeys>,
+}
+
+struct HubEngine {
+    conn_mgr: Arc<ConnectionManager>,
+    sync_engine: Arc<SyncEngine>,
+    happy_bot: Option<Arc<HappyBot>>,
+}
+
+// --- 后台任务生命周期管理 ---
+
+struct BackgroundTasks {
+    handles: Vec<(&'static str, JoinHandle<()>)>,
+}
+
+impl BackgroundTasks {
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+        }
+    }
+
+    fn spawn(&mut self, name: &'static str, fut: impl Future<Output = ()> + Send + 'static) {
+        self.handles.push((name, tokio::spawn(fut)));
+    }
+
+    async fn shutdown(self) {
+        for (name, handle) in self.handles {
+            handle.abort();
+            match handle.await {
+                Ok(()) => {}
+                Err(e) if e.is_cancelled() => {}
+                Err(e) => warn!(task = name, error = %e, "background task panicked"),
+            }
+        }
+    }
+}
+
+fn init_core(config: HubConfiguration) -> anyhow::Result<HubCore> {
+    let db_path_str = config.db_path.to_string_lossy().to_string();
+    let store = Arc::new(Store::new(&db_path_str)?);
+    let jwt_secret = config::jwt_secret::get_or_create_jwt_secret(&config.data_dir)?;
+    let vapid_keys = config::vapid_keys::get_or_create_vapid_keys(&config.data_dir).ok();
+    Ok(HubCore {
+        config,
+        store,
+        jwt_secret,
+        vapid_keys,
+    })
+}
+
+async fn init_engine(core: &HubCore) -> HubEngine {
+    let conn_mgr = Arc::new(ConnectionManager::new());
+    let sync_engine = Arc::new(SyncEngine::new(core.store.clone(), conn_mgr.clone()));
+
+    let setup = notifications::setup::build(
+        &core.config,
+        core.vapid_keys.clone(),
+        core.store.clone(),
+        sync_engine.clone(),
+    );
+    setup
+        .notification_hub
+        .clone()
+        .start(sync_engine.clone())
+        .await;
+
+    HubEngine {
+        conn_mgr,
+        sync_engine,
+        happy_bot: setup.happy_bot,
+    }
+}
+
+fn build_app(core: &HubCore, engine: &HubEngine) -> (Router, Arc<RwLock<TerminalRegistry>>) {
+    let vapid_public_key = core.vapid_keys.as_ref().map(|k| k.public_key.clone());
+
+    let app_state = AppState {
+        jwt_secret: core.jwt_secret.clone(),
+        cli_api_token: core.config.cli_api_token.clone(),
+        sync_engine: engine.sync_engine.clone(),
+        store: core.store.clone(),
+        vapid_public_key,
+        telegram_bot_token: core.config.telegram_bot_token.clone(),
+        data_dir: core.config.data_dir.clone(),
+        cors_origins: core.config.cors_origins.clone(),
+    };
+
+    let terminal_registry = Arc::new(RwLock::new(TerminalRegistry::new(
+        ws::DEFAULT_IDLE_TIMEOUT_MS,
+    )));
+    let ws_state = WsState {
+        store: core.store.clone(),
+        sync_engine: engine.sync_engine.clone(),
+        conn_mgr: engine.conn_mgr.clone(),
+        terminal_registry: terminal_registry.clone(),
+        cli_api_token: core.config.cli_api_token.clone(),
+        jwt_secret: core.jwt_secret.clone(),
+        max_terminals_per_socket: ws::DEFAULT_MAX_TERMINALS,
+        max_terminals_per_session: ws::DEFAULT_MAX_TERMINALS,
+    };
+
+    let web_router = web::build_router(app_state);
+    let ws_router = ws::ws_router(ws_state);
+    (web_router.merge(ws_router), terminal_registry)
+}
+
+fn spawn_background_tasks(
+    sync_engine: &Arc<SyncEngine>,
+    conn_mgr: &Arc<ConnectionManager>,
+    terminal_registry: &Arc<RwLock<TerminalRegistry>>,
+) -> BackgroundTasks {
+    let mut tasks = BackgroundTasks::new();
+
+    let se = sync_engine.clone();
+    tasks.spawn("session-expire", async move {
+        let mut interval = tokio::time::interval(SESSION_EXPIRE_INTERVAL);
+        loop {
+            interval.tick().await;
+            se.expire_inactive().await;
+        }
+    });
+
+    let tr = terminal_registry.clone();
+    let cm = conn_mgr.clone();
+    tasks.spawn("terminal-idle", async move {
+        let mut interval = tokio::time::interval(TERMINAL_IDLE_CHECK_INTERVAL);
+        loop {
+            interval.tick().await;
+            let actions = tr.write().await.drain_idle();
+            for action in actions {
+                cm.send_to(&action.socket_id, &action.err_msg).await;
+                cm.send_to(&action.cli_socket_id, &action.close_msg).await;
+            }
+        }
+    });
+
+    let se2 = sync_engine.clone();
+    tasks.spawn("sse-heartbeat", async move {
+        let mut interval = tokio::time::interval(SSE_HEARTBEAT_INTERVAL);
+        loop {
+            interval.tick().await;
+            if se2.sse_connection_count() > 0 {
+                se2.send_heartbeats();
+            }
+        }
+    });
+
+    tasks
+}
+
+// --- 入口 ---
+
+pub async fn run_hub() -> anyhow::Result<()> {
+    let config = HubConfiguration::new().await?;
     info!(
         port = config.listen_port,
         host = %config.listen_host,
@@ -32,147 +197,27 @@ pub async fn run_hub() -> anyhow::Result<()> {
         "starting hub"
     );
 
-    // Create store
-    let db_path_str = config.db_path.to_string_lossy().to_string();
-    let store = Arc::new(Store::new(&db_path_str)?);
+    let core = init_core(config)?;
+    let engine = init_engine(&core).await;
+    let (app, terminal_registry) = build_app(&core, &engine);
+    let bg_tasks =
+        spawn_background_tasks(&engine.sync_engine, &engine.conn_mgr, &terminal_registry);
 
-    // Get/create JWT secret
-    // Save into ${data_dir}/jwt-secret.json
-    let jwt_secret = config::jwt_secret::get_or_create_jwt_secret(&config.data_dir)?;
-
-    // Get/create VAPID keys (optional — push notifications disabled if unavailable)
-    let vapid_keys = config::vapid_keys::get_or_create_vapid_keys(&config.data_dir).ok();
-    let vapid_public_key = vapid_keys.as_ref().map(|k| k.public_key.clone());
-
-    // Create connection manager
-    let conn_mgr = Arc::new(ConnectionManager::new());
-
-    // Create SyncEngine
-    let sync_engine = Arc::new(SyncEngine::new(store.clone(), conn_mgr.clone()));
-
-    // Set up notification channels and hub
-    let notifications::setup::NotificationSetup {
-        notification_hub,
-        happy_bot,
-    } = notifications::setup::build(&config, vapid_keys, store.clone(), sync_engine.clone());
-    notification_hub.clone().start(sync_engine.clone()).await;
-
-    // Build AppState for HTTP routes
-    let app_state = AppState {
-        jwt_secret: jwt_secret.clone(),
-        cli_api_token: config.cli_api_token.clone(),
-        sync_engine: sync_engine.clone(),
-        store: store.clone(),
-        vapid_public_key,
-        telegram_bot_token: config.telegram_bot_token.clone(),
-        data_dir: config.data_dir.clone(),
-        cors_origins: config.cors_origins.clone(),
-    };
-
-    // Build WsState for WebSocket handlers
-    let terminal_registry = Arc::new(RwLock::new(TerminalRegistry::new(15 * 60_000)));
-    let ws_state = WsState {
-        store: store.clone(),
-        sync_engine: sync_engine.clone(),
-        conn_mgr: conn_mgr.clone(),
-        terminal_registry,
-        cli_api_token: config.cli_api_token.clone(),
-        jwt_secret,
-        max_terminals_per_socket: 4,
-        max_terminals_per_session: 4,
-    };
-
-    // Build combined router
-    let terminal_registry_for_idle = ws_state.terminal_registry.clone();
-    let web_router = web::build_router(app_state);
-    let ws_router = ws::ws_router(ws_state);
-    let app = web_router.merge(ws_router);
-
-    // Start periodic expiration timer
-    let sync_for_expire = sync_engine.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
-        loop {
-            interval.tick().await;
-            sync_for_expire.expire_inactive().await;
-        }
-    });
-
-    // Start terminal idle timeout checker
-    // 每60秒检查一次空闲的终端，如果超过15分钟未使用则关闭，并通知相关WebSocket连接
-    let conn_mgr_for_idle = conn_mgr.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            let idle_ids = terminal_registry_for_idle.read().await.collect_idle();
-            if idle_ids.is_empty() {
-                continue;
-            }
-            let mut reg = terminal_registry_for_idle.write().await;
-            for terminal_id in idle_ids {
-                if let Some(entry) = reg.remove(&terminal_id) {
-                    // Notify terminal webapp socket
-                    let err_msg = serde_json::json!({
-                        "event": "terminal:error",
-                        "data": {
-                            "terminalId": entry.terminal_id,
-                            "message": "Terminal closed due to inactivity."
-                        }
-                    });
-                    conn_mgr_for_idle
-                        .send_to(&entry.socket_id, &err_msg.to_string())
-                        .await;
-
-                    // Notify CLI socket
-                    let close_msg = serde_json::json!({
-                        "event": "terminal:close",
-                        "data": {
-                            "sessionId": entry.session_id,
-                            "terminalId": entry.terminal_id
-                        }
-                    });
-                    conn_mgr_for_idle
-                        .send_to(&entry.cli_socket_id, &close_msg.to_string())
-                        .await;
-                }
-            }
-        }
-    });
-
-    // Start SSE heartbeat timer (lazy: only sends when connections exist)
-    let sync_for_heartbeat = sync_engine.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            if sync_for_heartbeat.sse_connection_count() > 0 {
-                sync_for_heartbeat.send_heartbeats();
-            }
-        }
-    });
-
-    // Display startup info
-    if config.cli_api_token_is_new {
-        info!(token = %config.cli_api_token, "generated new CLI API token");
+    if core.config.cli_api_token_is_new {
+        info!(token = %core.config.cli_api_token, "generated new CLI API token");
     }
 
-    // Bind and serve
-    let addr = format!("{}:{}", config.listen_host, config.listen_port);
+    let addr = format!("{}:{}", core.config.listen_host, core.config.listen_port);
     let listener = TcpListener::bind(&addr).await?;
     info!(addr = %addr, "listening");
 
-    // Start Telegram bot (after HTTP server is ready)
-    if let Some(ref bot) = happy_bot {
+    if let Some(ref bot) = engine.happy_bot {
         bot.start();
     }
+    info!(url = %core.config.public_url, "hub ready");
 
-    info!(url = %config.public_url, "hub ready");
-
-    // Use a Notify so we can trigger graceful shutdown from outside
     let shutdown_notify = Arc::new(Notify::new());
     let shutdown_notify_srv = shutdown_notify.clone();
-
     let server_task = tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
@@ -181,26 +226,23 @@ pub async fn run_hub() -> anyhow::Result<()> {
             .await
     });
 
-    // Wait for OS signal
     shutdown_signal().await;
 
-    // Actively close all WebSocket connections
-    info!("closing all WebSocket connections");
-    conn_mgr.close_all().await;
-
-    // Tell axum to stop accepting new connections
+    // 先停止接受新连接，再关闭已有连接
     shutdown_notify.notify_one();
+    info!("closing WebSocket connections");
+    engine.conn_mgr.close_all().await;
 
-    // Give axum up to 5s to finish, then force abort
-    if tokio::time::timeout(Duration::from_secs(5), server_task)
+    if tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, server_task)
         .await
         .is_err()
     {
         info!("graceful shutdown timed out, forcing exit");
     }
 
-    // Graceful shutdown: stop bot
-    if let Some(ref bot) = happy_bot {
+    bg_tasks.shutdown().await;
+
+    if let Some(ref bot) = engine.happy_bot {
         bot.stop();
     }
 

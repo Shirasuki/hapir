@@ -8,7 +8,7 @@ use tracing::debug;
 ///
 /// Centralizes API URL, token, home directory, and path configuration.
 #[derive(Debug, Clone)]
-pub struct Configuration {
+pub struct CliConfiguration {
     pub api_url: String,
     pub cli_api_token: String,
     pub home_dir: PathBuf,
@@ -20,7 +20,7 @@ pub struct Configuration {
     pub is_experimental: bool,
 }
 
-impl Configuration {
+impl CliConfiguration {
     /// Create configuration from environment variables and defaults.
     pub fn new() -> anyhow::Result<Self> {
         let api_url =

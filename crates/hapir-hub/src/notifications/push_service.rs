@@ -7,8 +7,7 @@ use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use url::Url;
-
-use crate::config::settings::VapidKeys;
+use crate::config::VapidKeys;
 use crate::store::Store;
 use crate::store::push_subscriptions;
 

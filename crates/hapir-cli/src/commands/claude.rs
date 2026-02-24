@@ -5,7 +5,7 @@ use tracing::{debug, error};
 use crate::commands::common;
 use crate::modules::claude::run::{StartOptions, run_claude};
 use crate::modules::claude::version_check::check_claude_version;
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 
 /// Run the default (claude) command.
 ///
@@ -16,7 +16,7 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
 
     check_claude_version()?;
 
-    let mut config = Configuration::new()?;
+    let mut config = CliConfiguration::new()?;
 
     // Map --yolo / --dangerously-skip-permissions to permission mode
     let permission_mode = if args.dangerously_skip_permissions {

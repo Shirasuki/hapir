@@ -19,7 +19,7 @@ use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions, Sess
 use crate::agent::session_factory::{SessionBootstrapOptions, bootstrap_session};
 use crate::modules::claude::hook_server::start_hook_server;
 use crate::modules::claude::session::ClaudeSession;
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 use hapir_infra::handlers::uploads;
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
@@ -114,7 +114,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
     );
 
     // Bootstrap session
-    let config = Configuration::new()?;
+    let config = CliConfiguration::new()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "claude".to_string(),

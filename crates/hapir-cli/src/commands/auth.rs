@@ -1,10 +1,10 @@
 use std::io::{self, BufRead, Write};
 
-use hapir_infra::config::Configuration;
+use hapir_infra::config::CliConfiguration;
 use hapir_infra::persistence;
 
 pub fn run(action: Option<&str>) -> anyhow::Result<()> {
-    let config = Configuration::new()?;
+    let config = CliConfiguration::new()?;
 
     match action {
         Some("status") => show_status(&config),
@@ -17,7 +17,7 @@ pub fn run(action: Option<&str>) -> anyhow::Result<()> {
     }
 }
 
-fn show_status(config: &Configuration) -> anyhow::Result<()> {
+fn show_status(config: &CliConfiguration) -> anyhow::Result<()> {
     let settings = persistence::read_settings(&config.settings_file)?;
 
     let env_token = std::env::var("CLI_API_TOKEN").ok();
@@ -59,7 +59,7 @@ fn show_status(config: &Configuration) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn login(config: &Configuration) -> anyhow::Result<()> {
+fn login(config: &CliConfiguration) -> anyhow::Result<()> {
     if !atty::is(atty::Stream::Stdin) {
         eprintln!("Cannot prompt for token in non-TTY environment.");
         eprintln!("Set CLI_API_TOKEN environment variable instead.");
@@ -90,7 +90,7 @@ fn login(config: &Configuration) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn logout(config: &Configuration) -> anyhow::Result<()> {
+fn logout(config: &CliConfiguration) -> anyhow::Result<()> {
     persistence::update_settings(&config.settings_file, |s| {
         s.cli_api_token = None;
         s.machine_id = None;

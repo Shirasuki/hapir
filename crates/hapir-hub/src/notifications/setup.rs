@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use crate::config::Configuration;
-use crate::config::settings::VapidKeys;
+use crate::config::{HubConfiguration, VapidKeys};
 use crate::notifications::notification_hub::NotificationHub;
 use crate::notifications::push_channel::{NotificationChannel, PushNotificationChannel};
 use crate::notifications::push_service::PushService;
@@ -9,13 +8,16 @@ use crate::store::Store;
 use crate::sync::SyncEngine;
 use crate::telegram::bot::HappyBot;
 
+const READY_COOLDOWN_MS: i64 = 5_000;
+const PERMISSION_DEBOUNCE_MS: u64 = 500;
+
 pub struct NotificationSetup {
     pub notification_hub: Arc<NotificationHub>,
     pub happy_bot: Option<Arc<HappyBot>>,
 }
 
 pub fn build(
-    config: &Configuration,
+    config: &HubConfiguration,
     vapid_keys: Option<VapidKeys>,
     store: Arc<Store>,
     sync_engine: Arc<SyncEngine>,
@@ -29,7 +31,6 @@ pub fn build(
         let push_channel = Arc::new(PushNotificationChannel::new(
             push_service,
             sync_engine.clone(),
-            config.public_url.clone(),
         ));
         channels.push(push_channel);
     }
@@ -53,7 +54,11 @@ pub fn build(
         None
     };
 
-    let notification_hub = Arc::new(NotificationHub::new(channels, 5_000, 500));
+    let notification_hub = Arc::new(NotificationHub::new(
+        channels,
+        READY_COOLDOWN_MS,
+        PERMISSION_DEBOUNCE_MS,
+    ));
 
     NotificationSetup {
         notification_hub,

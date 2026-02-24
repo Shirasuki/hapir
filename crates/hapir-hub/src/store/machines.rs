@@ -6,6 +6,7 @@ use hapir_shared::schemas::HapirMachineMetadata;
 use rusqlite::Connection;
 use serde_json::Value;
 
+#[inline]
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
