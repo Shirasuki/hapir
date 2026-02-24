@@ -22,7 +22,7 @@ pub struct MachineRunnerState {
 }
 
 /// Machine-level metadata sent when registering a machine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HapirMachineMetadata {
     pub host: String,

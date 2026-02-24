@@ -4,6 +4,11 @@ use std::future::Future;
 
 use serde_json::Value;
 
+/// Build a scoped RPC method name: `"{scope_id}:{method}"`.
+pub fn scoped_method(scope_id: &str, method: &str) -> String {
+    format!("{scope_id}:{method}")
+}
+
 /// Trait for registering RPC handlers.
 ///
 /// Implementors scope the method name (e.g. with a session or machine ID)

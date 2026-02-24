@@ -8,6 +8,7 @@ use super::outbox::SocketOutbox;
 use super::protocol::{WsMessage, WsRequest};
 use crate::utils::time::epoch_ms;
 use futures::{SinkExt, StreamExt};
+use hapir_shared::socket::RpcRegisterRequest;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tokio::time;
@@ -18,11 +19,26 @@ const PING_INTERVAL: Duration = Duration::from_secs(25);
 const PONG_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WsClientType {
+    Session,
+    Machine,
+}
+
+impl WsClientType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Session => "session-scoped",
+            Self::Machine => "machine-scoped",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WsClientConfig {
     pub url: String,
     pub auth_token: String,
-    pub client_type: String,
+    pub client_type: WsClientType,
     pub scope_id: String,
     pub max_reconnect_attempts: Option<usize>,
 }
@@ -86,7 +102,7 @@ impl WsClient {
                 .replace("http://", "ws://")
                 .replace("https://", "wss://"),
             urlencoding::encode(&config.auth_token),
-            urlencoding::encode(&config.client_type),
+            urlencoding::encode(config.client_type.as_str()),
             urlencoding::encode(&config.scope_id),
         )
     }
@@ -107,7 +123,11 @@ impl WsClient {
     ) {
         let handlers = handlers.read().await;
         for method in handlers.keys() {
-            let req = WsRequest::fire("rpc-register", serde_json::json!({"method": method}));
+            let payload = serde_json::to_value(&RpcRegisterRequest {
+                method: method.clone(),
+            })
+            .unwrap_or_default();
+            let req = WsRequest::fire("rpc-register", payload);
             if let Ok(json) = serde_json::to_string(&req) {
                 let _ = tx.send(Message::Text(json.into()));
             }

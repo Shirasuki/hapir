@@ -5,6 +5,7 @@ use hapir_infra::auth;
 use hapir_infra::config::Configuration;
 use hapir_infra::handlers;
 use hapir_infra::persistence;
+use hapir_infra::rpc::RpcRegistry;
 use hapir_infra::utils::machine::build_machine_metadata;
 use hapir_infra::ws::machine_client::WsMachineClient;
 use hapir_shared::schemas::{MachineRunnerState, MachineRunnerStatus};
@@ -329,7 +330,7 @@ async fn connect_to_hub(
     ));
 
     let rs = runner_state.clone();
-    ws.register_rpc("spawn-happy-session", move |data| {
+    ws.register("spawn-happy-session", move |data| {
         let rs = rs.clone();
         Box::pin(async move {
             let req: crate::types::SpawnSessionRequest =
@@ -360,7 +361,7 @@ async fn connect_to_hub(
     }).await;
 
     let rs = runner_state.clone();
-    ws.register_rpc("stop-session", move |data| {
+    ws.register("stop-session", move |data| {
         let rs = rs.clone();
         Box::pin(async move {
             let session_id = data.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
@@ -380,7 +381,7 @@ async fn connect_to_hub(
     // PLACEHOLDER_MORE_RPC
 
     let rs = runner_state.clone();
-    ws.register_rpc("stop-runner", move |_data| {
+    ws.register("stop-runner", move |_data| {
         let rs = rs.clone();
         Box::pin(async move {
             let rs2 = rs.clone();
@@ -393,7 +394,7 @@ async fn connect_to_hub(
     })
     .await;
 
-    ws.register_rpc("path-exists", move |data| {
+    ws.register("path-exists", move |data| {
         Box::pin(async move {
             let paths = data
                 .get("paths")
@@ -439,7 +440,7 @@ async fn connect_to_hub(
     ws.connect(Duration::from_secs(10)).await?;
 
     let meta = build_machine_metadata(&config.home_dir);
-    ws.update_metadata(|_| serde_json::to_value(&meta).unwrap_or(json!({})))
+    ws.update_metadata(|_| meta)
         .await
         .map_err(|e| warn!("failed to send machine metadata: {e}"))
         .ok();

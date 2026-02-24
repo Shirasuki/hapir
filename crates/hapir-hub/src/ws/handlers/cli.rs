@@ -4,6 +4,10 @@ use crate::store::Store;
 use crate::sync::SyncEngine;
 use crate::sync::todos::extract_todos_from_message_content;
 use hapir_shared::schemas::{DecryptedMessage, MessageDeltaData, SyncEvent};
+use hapir_shared::socket::{
+    MachineAliveRequest, MachineUpdateMetadataRequest, MachineUpdateStateRequest,
+    RpcRegisterRequest, SessionEndRequest,
+};
 use hapir_shared::ws_protocol::{WsBroadcast, WsMessage};
 use serde_json::Value;
 use std::sync::Arc;
@@ -113,14 +117,14 @@ pub async fn handle_cli_event(
                 .await
         }
         "rpc-register" => {
-            if let Some(method) = data.get("method").and_then(|v| v.as_str()) {
-                conn_mgr.rpc_register(conn_id, method).await;
+            if let Ok(req) = serde_json::from_value::<RpcRegisterRequest>(data) {
+                conn_mgr.rpc_register(conn_id, &req.method).await;
             }
             None
         }
         "rpc-unregister" => {
-            if let Some(method) = data.get("method").and_then(|v| v.as_str()) {
-                conn_mgr.rpc_unregister(conn_id, method).await;
+            if let Ok(req) = serde_json::from_value::<RpcRegisterRequest>(data) {
+                conn_mgr.rpc_unregister(conn_id, &req.method).await;
             }
             None
         }
@@ -490,21 +494,17 @@ async fn handle_session_end(
     sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
-    let sid = match data.get("sid").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => return,
-    };
-    let time = match data.get("time").and_then(|v| v.as_i64()) {
-        Some(t) => t,
-        None => return,
+    let req: SessionEndRequest = match serde_json::from_value(data) {
+        Ok(r) => r,
+        Err(_) => return,
     };
 
-    if let Err(err) = resolve_session_access(store, &sid, namespace) {
-        emit_access_error(conn_mgr, conn_id, "session", &sid, err).await;
+    if let Err(err) = resolve_session_access(store, &req.sid, namespace) {
+        emit_access_error(conn_mgr, conn_id, "session", &req.sid, err).await;
         return;
     }
 
-    sync_engine.handle_session_end(&sid, time).await;
+    sync_engine.handle_session_end(&req.sid, req.time).await;
 }
 
 async fn handle_machine_alive(
@@ -515,21 +515,19 @@ async fn handle_machine_alive(
     sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
-    let machine_id = match data.get("machineId").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => return,
-    };
-    let time = match data.get("time").and_then(|v| v.as_i64()) {
-        Some(t) => t,
-        None => return,
+    let req: MachineAliveRequest = match serde_json::from_value(data) {
+        Ok(r) => r,
+        Err(_) => return,
     };
 
-    if let Err(err) = resolve_machine_access(store, &machine_id, namespace) {
-        emit_access_error(conn_mgr, conn_id, "machine", &machine_id, err).await;
+    if let Err(err) = resolve_machine_access(store, &req.machine_id, namespace) {
+        emit_access_error(conn_mgr, conn_id, "machine", &req.machine_id, err).await;
         return;
     }
 
-    sync_engine.handle_machine_alive(&machine_id, time).await;
+    sync_engine
+        .handle_machine_alive(&req.machine_id, req.time)
+        .await;
 }
 
 async fn handle_machine_update_metadata(
@@ -540,9 +538,9 @@ async fn handle_machine_update_metadata(
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
 ) -> Option<Value> {
-    let mid = data.get("machineId").and_then(|v| v.as_str())?;
-    let expected_version = data.get("expectedVersion").and_then(|v| v.as_i64())?;
-    let metadata = data.get("metadata")?;
+    let req: MachineUpdateMetadataRequest = serde_json::from_value(data).ok()?;
+    let mid = &req.machine_id;
+    let metadata = serde_json::to_value(&req.metadata).ok()?;
 
     use crate::store::{machines, types::VersionedUpdateResult};
     if let Err(err) = resolve_machine_access(store, mid, namespace) {
@@ -556,8 +554,8 @@ async fn handle_machine_update_metadata(
     let result = machines::update_machine_metadata(
         &store.conn(),
         mid,
-        &metadata.clone(),
-        expected_version,
+        &metadata,
+        req.expected_version,
         namespace,
     );
 
@@ -608,9 +606,9 @@ async fn handle_machine_update_state(
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
 ) -> Option<Value> {
-    let mid = data.get("machineId").and_then(|v| v.as_str())?;
-    let expected_version = data.get("expectedVersion").and_then(|v| v.as_i64())?;
-    let runner_state = data.get("runnerState");
+    let req: MachineUpdateStateRequest = serde_json::from_value(data).ok()?;
+    let mid = &req.machine_id;
+    let runner_state = &req.runner_state;
 
     use crate::store::{machines, types::VersionedUpdateResult};
     if let Err(err) = resolve_machine_access(store, mid, namespace) {
@@ -624,8 +622,8 @@ async fn handle_machine_update_state(
     let result = machines::update_machine_runner_state(
         &store.conn(),
         mid,
-        runner_state,
-        expected_version,
+        Some(runner_state),
+        req.expected_version,
         namespace,
     );
 

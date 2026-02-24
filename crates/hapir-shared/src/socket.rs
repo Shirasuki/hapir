@@ -1,6 +1,91 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::schemas::{HapirMachineMetadata, HapirSessionMetadata};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineUpdateMetadataRequest {
+    pub machine_id: String,
+    pub expected_version: i64,
+    pub metadata: HapirMachineMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineUpdateStateRequest {
+    pub machine_id: String,
+    pub expected_version: i64,
+    pub runner_state: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineAliveRequest {
+    pub machine_id: String,
+    pub time: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionEndRequest {
+    pub sid: String,
+    pub time: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAliveRequest {
+    pub sid: String,
+    pub time: i64,
+    pub thinking: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_status: Option<String>,
+    pub mode: String,
+    pub runtime: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUpdateMetadataRequest {
+    pub sid: String,
+    pub expected_version: i64,
+    pub metadata: HapirSessionMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUpdateStateRequest {
+    pub sid: String,
+    pub expected_version: i64,
+    pub agent_state: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionMessageRequest {
+    pub sid: String,
+    pub message: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionMessageDeltaRequest {
+    pub sid: String,
+    pub delta: MessageDelta,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageDelta {
+    pub message_id: String,
+    pub text: String,
+    pub is_final: bool,
+}
+
+/// Payload for the `rpc-register` / `rpc-unregister` WebSocket events.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RpcRegisterRequest {
+    pub method: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SocketErrorReason {

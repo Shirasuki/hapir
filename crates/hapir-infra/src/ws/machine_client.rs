@@ -3,17 +3,23 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hapir_shared::schemas::MachineRunnerState;
-use serde_json::{Value, json};
+use hapir_shared::schemas::{HapirMachineMetadata, MachineRunnerState};
+use hapir_shared::socket::{
+    MachineAliveRequest, MachineUpdateMetadataRequest, MachineUpdateStateRequest,
+    RpcRegisterRequest, SessionEndRequest, UpdateBody,
+};
+use hapir_shared::ws_protocol::WsBroadcast;
+use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::client::{WsClient, WsClientConfig};
-use crate::rpc::RpcRegistry;
+use super::client::{WsClient, WsClientConfig, WsClientType};
+use crate::rpc::{self, RpcRegistry};
+use crate::utils::time::epoch_ms;
 
 pub struct WsMachineClient {
     ws: Arc<WsClient>,
     machine_id: String,
-    metadata: Arc<Mutex<Option<Value>>>,
+    metadata: Arc<Mutex<Option<HapirMachineMetadata>>>,
     metadata_version: Arc<Mutex<i64>>,
     runner_state: Arc<Mutex<Option<MachineRunnerState>>>,
     runner_state_version: Arc<Mutex<i64>>,
@@ -25,7 +31,7 @@ impl WsMachineClient {
         let ws = Arc::new(WsClient::new(WsClientConfig {
             url: api_url.to_string(),
             auth_token: token.to_string(),
-            client_type: "machine-scoped".to_string(),
+            client_type: WsClientType::Machine,
             scope_id: machine_id.to_string(),
             max_reconnect_attempts: None,
         }));
@@ -42,6 +48,14 @@ impl WsMachineClient {
     }
 
     pub async fn connect(&self, timeout: Duration) -> anyhow::Result<()> {
+        self.register_update_handler().await;
+        self.register_reconnect_handler().await;
+        self.ws.connect(timeout).await?;
+        self.start_keep_alive().await;
+        Ok(())
+    }
+
+    async fn register_update_handler(&self) {
         let md = self.metadata.clone();
         let md_ver = self.metadata_version.clone();
         let rs = self.runner_state.clone();
@@ -55,83 +69,99 @@ impl WsMachineClient {
                 let rs_ver = rs_ver.clone();
 
                 tokio::spawn(async move {
-                    if let Some(update_type) = data.get("type").and_then(|v| v.as_str())
-                        && update_type == "update-machine"
-                    {
-                        if let Some(new_ver) = data.get("metadataVersion").and_then(|v| v.as_i64())
-                            && new_ver > *md_ver.lock().await
-                        {
-                            *md.lock().await = data.get("metadata").cloned();
-                            *md_ver.lock().await = new_ver;
+                    let Ok(broadcast) = serde_json::from_value::<WsBroadcast>(data) else {
+                        return;
+                    };
+                    let Ok(UpdateBody::UpdateMachine {
+                        metadata,
+                        runner_state,
+                        ..
+                    }) = serde_json::from_value::<UpdateBody>(broadcast.body)
+                    else {
+                        return;
+                    };
+
+                    if let Some(vv) = metadata {
+                        let new_ver = vv.version as i64;
+                        if new_ver > *md_ver.lock().await {
+                            if let Ok(parsed) =
+                                serde_json::from_value::<HapirMachineMetadata>(vv.value)
+                            {
+                                *md.lock().await = Some(parsed);
+                                *md_ver.lock().await = new_ver;
+                            }
                         }
-                        if let Some(new_ver) =
-                            data.get("runnerStateVersion").and_then(|v| v.as_i64())
-                            && new_ver > *rs_ver.lock().await
-                        {
-                            if let Some(val) = data.get("runnerState")
-                                && let Ok(parsed) = serde_json::from_value::<MachineRunnerState>(val.clone())
+                    }
+
+                    if let Some(vv) = runner_state {
+                        let new_ver = vv.version as i64;
+                        if new_ver > *rs_ver.lock().await {
+                            if let Ok(parsed) =
+                                serde_json::from_value::<MachineRunnerState>(vv.value)
                             {
                                 *rs.lock().await = Some(parsed);
+                                *rs_ver.lock().await = new_ver;
                             }
-                            *rs_ver.lock().await = new_ver;
                         }
                     }
                 });
             })
             .await;
+    }
 
-        // Resend on reconnect
-        {
-            let ws = self.ws.clone();
-            let mid = self.machine_id.clone();
-            let md = self.metadata.clone();
-            let md_ver = self.metadata_version.clone();
-            let rs = self.runner_state.clone();
-            let rs_ver = self.runner_state_version.clone();
-            self.ws
-                .on_connect(move || {
-                    let ws = ws.clone();
-                    let mid = mid.clone();
-                    let md = md.clone();
-                    let md_ver = md_ver.clone();
-                    let rs = rs.clone();
-                    let rs_ver = rs_ver.clone();
-                    tokio::spawn(async move {
-                        if let Some(ref metadata) = *md.lock().await {
-                            let version = *md_ver.lock().await;
-                            let _ = ws
-                                .emit_with_ack(
-                                    "machine-update-metadata",
-                                    json!({
-                                        "machineId": mid,
-                                        "expectedVersion": version,
-                                        "metadata": metadata,
-                                    }),
-                                )
-                                .await;
-                        }
-                        if let Some(ref state) = *rs.lock().await {
-                            let version = *rs_ver.lock().await;
-                            let state_value = serde_json::to_value(state).unwrap_or(json!({}));
-                            let _ = ws
-                                .emit_with_ack(
-                                    "machine-update-state",
-                                    json!({
-                                        "machineId": mid,
-                                        "expectedVersion": version,
-                                        "runnerState": state_value,
-                                    }),
-                                )
-                                .await;
-                        }
-                    });
-                })
-                .await;
-        }
+    async fn register_reconnect_handler(&self) {
+        let ws = self.ws.clone();
+        let mid = self.machine_id.clone();
+        let md = self.metadata.clone();
+        let md_ver = self.metadata_version.clone();
+        let rs = self.runner_state.clone();
+        let rs_ver = self.runner_state_version.clone();
 
-        self.ws.connect(timeout).await?;
+        self.ws
+            .on_connect(move || {
+                let ws = ws.clone();
+                let mid = mid.clone();
+                let md = md.clone();
+                let md_ver = md_ver.clone();
+                let rs = rs.clone();
+                let rs_ver = rs_ver.clone();
+                tokio::spawn(async move {
+                    let md_snapshot = md.lock().await.clone();
+                    if let Some(metadata) = md_snapshot {
+                        let version = *md_ver.lock().await;
+                        let req = MachineUpdateMetadataRequest {
+                            machine_id: mid.clone(),
+                            expected_version: version,
+                            metadata,
+                        };
+                        let _ = ws
+                            .emit_with_ack(
+                                "machine-update-metadata",
+                                serde_json::to_value(&req).unwrap_or_default(),
+                            )
+                            .await;
+                    }
+                    let rs_snapshot = rs.lock().await.clone();
+                    if let Some(state) = rs_snapshot {
+                        let version = *rs_ver.lock().await;
+                        let req = MachineUpdateStateRequest {
+                            machine_id: mid.clone(),
+                            expected_version: version,
+                            runner_state: serde_json::to_value(&state).unwrap_or_default(),
+                        };
+                        let _ = ws
+                            .emit_with_ack(
+                                "machine-update-state",
+                                serde_json::to_value(&req).unwrap_or_default(),
+                            )
+                            .await;
+                    }
+                });
+            })
+            .await;
+    }
 
-        // Keep-alive every 20s
+    async fn start_keep_alive(&self) {
         let ws = self.ws.clone();
         let mid = self.machine_id.clone();
         let handle = tokio::spawn(async move {
@@ -142,39 +172,46 @@ impl WsMachineClient {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as i64;
-                ws.emit("machine-alive", json!({ "machineId": mid, "time": time }))
-                    .await;
+                let req = MachineAliveRequest {
+                    machine_id: mid.clone(),
+                    time,
+                };
+                ws.emit(
+                    "machine-alive",
+                    serde_json::to_value(&req).unwrap_or_default(),
+                )
+                .await;
             }
         });
         *self.keep_alive_handle.lock().await = Some(handle);
-        Ok(())
     }
 
     pub async fn update_metadata<F>(&self, handler: F) -> anyhow::Result<()>
     where
-        F: FnOnce(Value) -> Value,
+        F: FnOnce(HapirMachineMetadata) -> HapirMachineMetadata,
     {
-        let current = self.metadata.lock().await.clone().unwrap_or(json!({}));
+        let current = self.metadata.lock().await.clone().unwrap_or_default();
         let updated = handler(current);
         let version = *self.metadata_version.lock().await;
 
+        let req = MachineUpdateMetadataRequest {
+            machine_id: self.machine_id.clone(),
+            expected_version: version,
+            metadata: updated,
+        };
+
         let ack = self
             .ws
-            .emit_with_ack(
-                "machine-update-metadata",
-                json!({
-                    "machineId": self.machine_id,
-                    "expectedVersion": version,
-                    "metadata": updated,
-                }),
-            )
+            .emit_with_ack("machine-update-metadata", serde_json::to_value(&req)?)
             .await?;
 
         if let Some(ver) = ack.get("version").and_then(|v| v.as_i64()) {
             *self.metadata_version.lock().await = ver;
         }
-        if let Some(val) = ack.get("metadata") {
-            *self.metadata.lock().await = Some(val.clone());
+        if let Some(val) = ack.get("metadata")
+            && let Ok(parsed) = serde_json::from_value::<HapirMachineMetadata>(val.clone())
+        {
+            *self.metadata.lock().await = Some(parsed);
         }
         Ok(())
     }
@@ -196,16 +233,15 @@ impl WsMachineClient {
         let updated_value = serde_json::to_value(&updated)?;
         let version = *self.runner_state_version.lock().await;
 
+        let req = MachineUpdateStateRequest {
+            machine_id: self.machine_id.clone(),
+            expected_version: version,
+            runner_state: updated_value,
+        };
+
         let ack = self
             .ws
-            .emit_with_ack(
-                "machine-update-state",
-                json!({
-                    "machineId": self.machine_id,
-                    "expectedVersion": version,
-                    "runnerState": updated_value,
-                }),
-            )
+            .emit_with_ack("machine-update-state", serde_json::to_value(&req)?)
             .await?;
 
         if let Some(ver) = ack.get("version").and_then(|v| v.as_i64()) {
@@ -219,38 +255,15 @@ impl WsMachineClient {
         Ok(())
     }
 
-    pub async fn register_rpc(
-        &self,
-        method: &str,
-        handler: impl Fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send>>
-        + Send
-        + Sync
-        + 'static,
-    ) {
-        let scoped_method = format!("{}:{}", self.machine_id, method);
-        self.ws.register_rpc(&scoped_method, handler).await;
-        self.ws
-            .emit(
-                "rpc-register",
-                json!({
-                    "method": format!("{}:{}", self.machine_id, method),
-                }),
-            )
-            .await;
-    }
-
     pub async fn send_session_end(&self, session_id: &str) {
-        let time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let req = SessionEndRequest {
+            sid: session_id.to_string(),
+            time: epoch_ms() as i64,
+        };
         self.ws
             .emit(
                 "session-end",
-                json!({
-                    "sid": session_id,
-                    "time": time,
-                }),
+                serde_json::to_value(&req).unwrap_or_default(),
             )
             .await;
     }
@@ -274,18 +287,16 @@ impl RpcRegistry for WsMachineClient {
         F: Fn(Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Value> + Send + 'static,
     {
-        let scoped_method = format!("{}:{}", self.machine_id, method);
+        let scoped = rpc::scoped_method(&self.machine_id, method);
         let ws = self.ws.clone();
         let boxed_handler = move |params: Value| -> Pin<Box<dyn Future<Output = Value> + Send>> {
             Box::pin(handler(params))
         };
         async move {
-            ws.register_rpc(&scoped_method, boxed_handler).await;
+            ws.register_rpc(&scoped, boxed_handler).await;
             ws.emit(
                 "rpc-register",
-                json!({
-                    "method": scoped_method,
-                }),
+                serde_json::to_value(&RpcRegisterRequest { method: scoped }).unwrap_or_default(),
             )
             .await;
         }

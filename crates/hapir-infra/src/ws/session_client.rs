@@ -1,15 +1,22 @@
+use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use hapir_shared::schemas::{HapirSessionMetadata, Session};
+use hapir_shared::socket::{
+    MessageDelta, RpcRegisterRequest, SessionAliveRequest, SessionEndRequest,
+    SessionMessageDeltaRequest, SessionMessageRequest, SessionUpdateMetadataRequest,
+    SessionUpdateStateRequest, UpdateBody,
+};
+use hapir_shared::ws_protocol::WsBroadcast;
 
-use super::client::{WsClient, WsClientConfig};
-use crate::rpc::RpcRegistry;
+use super::client::{WsClient, WsClientConfig, WsClientType};
+use crate::rpc::{self, RpcRegistry};
+use crate::utils::time::epoch_ms;
 
 pub struct WsSessionClient {
     ws: Arc<WsClient>,
@@ -27,7 +34,7 @@ impl WsSessionClient {
         let ws = Arc::new(WsClient::new(WsClientConfig {
             url: api_url.to_string(),
             auth_token: token.to_string(),
-            client_type: "session-scoped".to_string(),
+            client_type: WsClientType::Session,
             scope_id: session.id.clone(),
             max_reconnect_attempts: None,
         }));
@@ -49,84 +56,96 @@ impl WsSessionClient {
     }
 
     pub async fn connect(&self, timeout: Duration) -> anyhow::Result<()> {
-        let metadata = self.metadata.clone();
-        let metadata_version = self.metadata_version.clone();
-        let agent_state = self.agent_state.clone();
-        let agent_state_version = self.agent_state_version.clone();
-        let last_seq = self.last_seen_message_seq.clone();
+        self.register_update_handler().await;
+        self.register_reconnect_handler().await;
+        self.ws.connect(timeout).await?;
+        Ok(())
+    }
+
+    async fn register_update_handler(&self) {
+        let md = self.metadata.clone();
+        let md_ver = self.metadata_version.clone();
+        let as_ = self.agent_state.clone();
+        let as_ver = self.agent_state_version.clone();
+        let seq = self.last_seen_message_seq.clone();
 
         self.ws
             .on("update", move |data| {
-                let md = metadata.clone();
-                let md_ver = metadata_version.clone();
-                let as_ = agent_state.clone();
-                let as_ver = agent_state_version.clone();
-                let seq = last_seq.clone();
+                let md = md.clone();
+                let md_ver = md_ver.clone();
+                let as_ = as_.clone();
+                let as_ver = as_ver.clone();
+                let seq = seq.clone();
 
                 tokio::spawn(async move {
-                    if let Some(new_ver) = data.get("metadataVersion").and_then(|v| v.as_i64()) {
-                        let current = *md_ver.lock().await;
-                        if new_ver > current
-                            && let Some(new_md) = data.get("metadata")
-                            && let Ok(parsed) =
-                                serde_json::from_value::<HapirSessionMetadata>(new_md.clone())
-                        {
-                            *md.lock().await = Some(parsed);
-                            *md_ver.lock().await = new_ver;
-                        }
-                    }
+                    let Ok(broadcast) = serde_json::from_value::<WsBroadcast>(data) else {
+                        return;
+                    };
 
-                    if let Some(new_ver) = data.get("agentStateVersion").and_then(|v| v.as_i64()) {
-                        let current = *as_ver.lock().await;
-                        if new_ver > current
-                            && let Some(new_state) = data.get("agentState")
-                        {
-                            *as_.lock().await = Some(new_state.clone());
-                            *as_ver.lock().await = new_ver;
-                        }
-                    }
-
-                    if let Some(msg_seq) = data.get("messageSeq").and_then(|v| v.as_i64()) {
+                    {
                         let mut current = seq.lock().await;
-                        if msg_seq > *current {
-                            *current = msg_seq;
+                        if broadcast.seq > *current {
+                            *current = broadcast.seq;
+                        }
+                    }
+
+                    let Ok(UpdateBody::UpdateSession {
+                        metadata,
+                        agent_state,
+                        ..
+                    }) = serde_json::from_value::<UpdateBody>(broadcast.body)
+                    else {
+                        return;
+                    };
+                    if let Some(vv) = metadata {
+                        let new_ver = vv.version as i64;
+                        if new_ver > *md_ver.lock().await {
+                            if let Ok(parsed) =
+                                serde_json::from_value::<HapirSessionMetadata>(vv.value)
+                            {
+                                *md.lock().await = Some(parsed);
+                                *md_ver.lock().await = new_ver;
+                            }
+                        }
+                    }
+
+                    if let Some(vv) = agent_state {
+                        let new_ver = vv.version as i64;
+                        if new_ver > *as_ver.lock().await {
+                            *as_.lock().await = Some(vv.value);
+                            *as_ver.lock().await = new_ver;
                         }
                     }
                 });
             })
             .await;
+    }
 
-        // Send session-alive on every (re)connect with fresh timestamp
-        {
-            let ws = self.ws.clone();
-            let sid = self.session_id.clone();
-            self.ws
-                .on_connect(move || {
-                    let ws = ws.clone();
-                    let sid = sid.clone();
-                    tokio::spawn(async move {
-                        let time = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as i64;
-                        ws.emit(
-                            "session-alive",
-                            json!({
-                                "sid": sid,
-                                "time": time,
-                                "thinking": false,
-                                "mode": "local",
-                                "runtime": "",
-                            }),
-                        )
-                        .await;
-                    });
-                })
-                .await;
-        }
+    async fn register_reconnect_handler(&self) {
+        let ws = self.ws.clone();
+        let sid = self.session_id.clone();
 
-        self.ws.connect(timeout).await?;
-        Ok(())
+        self.ws
+            .on_connect(move || {
+                let ws = ws.clone();
+                let sid = sid.clone();
+                tokio::spawn(async move {
+                    let req = SessionAliveRequest {
+                        sid,
+                        time: epoch_ms() as i64,
+                        thinking: false,
+                        thinking_status: None,
+                        mode: "local".to_string(),
+                        runtime: String::new(),
+                    };
+                    ws.emit(
+                        "session-alive",
+                        serde_json::to_value(&req).unwrap_or_default(),
+                    )
+                    .await;
+                });
+            })
+            .await;
     }
 
     pub async fn keep_alive(
@@ -136,37 +155,31 @@ impl WsSessionClient {
         mode: &str,
         runtime: &str,
     ) {
-        let time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let req = SessionAliveRequest {
+            sid: self.session_id.clone(),
+            time: epoch_ms() as i64,
+            thinking,
+            thinking_status: thinking_status.map(|s| s.to_string()),
+            mode: mode.to_string(),
+            runtime: runtime.to_string(),
+        };
         self.ws
             .emit(
                 "session-alive",
-                json!({
-                    "sid": self.session_id,
-                    "time": time,
-                    "thinking": thinking,
-                    "thinkingStatus": thinking_status,
-                    "mode": mode,
-                    "runtime": runtime,
-                }),
+                serde_json::to_value(&req).unwrap_or_default(),
             )
             .await;
     }
 
     pub async fn send_session_end(&self) {
-        let time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let req = SessionEndRequest {
+            sid: self.session_id.clone(),
+            time: epoch_ms() as i64,
+        };
         self.ws
             .emit(
                 "session-end",
-                json!({
-                    "sid": self.session_id,
-                    "time": time,
-                }),
+                serde_json::to_value(&req).unwrap_or_default(),
             )
             .await;
     }
@@ -182,16 +195,15 @@ impl WsSessionClient {
         let updated = handler(current);
         let version = *self.metadata_version.lock().await;
 
+        let req = SessionUpdateMetadataRequest {
+            sid: self.session_id.clone(),
+            expected_version: version,
+            metadata: updated,
+        };
+
         let ack = self
             .ws
-            .emit_with_ack(
-                "update-metadata",
-                json!({
-                    "sid": self.session_id,
-                    "expectedVersion": version,
-                    "metadata": updated,
-                }),
-            )
+            .emit_with_ack("update-metadata", serde_json::to_value(&req)?)
             .await?;
 
         apply_versioned_ack(&ack, "metadata", &self.metadata, &self.metadata_version).await;
@@ -202,20 +214,24 @@ impl WsSessionClient {
     where
         F: FnOnce(Value) -> Value,
     {
-        let current = self.agent_state.lock().await.clone().unwrap_or(json!({}));
+        let current = self
+            .agent_state
+            .lock()
+            .await
+            .clone()
+            .unwrap_or(Value::Object(Default::default()));
         let updated = handler(current);
         let version = *self.agent_state_version.lock().await;
 
+        let req = SessionUpdateStateRequest {
+            sid: self.session_id.clone(),
+            expected_version: version,
+            agent_state: updated,
+        };
+
         let ack = self
             .ws
-            .emit_with_ack(
-                "update-state",
-                json!({
-                    "sid": self.session_id,
-                    "expectedVersion": version,
-                    "agentState": updated,
-                }),
-            )
+            .emit_with_ack("update-state", serde_json::to_value(&req)?)
             .await?;
 
         apply_versioned_ack(
@@ -229,29 +245,28 @@ impl WsSessionClient {
     }
 
     pub async fn send_message(&self, body: Value) {
+        let req = SessionMessageRequest {
+            sid: self.session_id.clone(),
+            message: body,
+        };
         self.ws
-            .emit(
-                "message",
-                json!({
-                    "sid": self.session_id,
-                    "message": body,
-                }),
-            )
+            .emit("message", serde_json::to_value(&req).unwrap_or_default())
             .await;
     }
 
     pub async fn send_message_delta(&self, message_id: &str, text: &str, is_final: bool) {
+        let req = SessionMessageDeltaRequest {
+            sid: self.session_id.clone(),
+            delta: MessageDelta {
+                message_id: message_id.to_string(),
+                text: text.to_string(),
+                is_final,
+            },
+        };
         self.ws
             .emit(
                 "message-delta",
-                json!({
-                    "sid": self.session_id,
-                    "delta": {
-                        "messageId": message_id,
-                        "text": text,
-                        "isFinal": is_final,
-                    }
-                }),
+                serde_json::to_value(&req).unwrap_or_default(),
             )
             .await;
     }
@@ -259,20 +274,15 @@ impl WsSessionClient {
     pub async fn register_rpc(
         &self,
         method: &str,
-        handler: impl Fn(Value) -> std::pin::Pin<Box<dyn Future<Output = Value> + Send>>
-        + Send
-        + Sync
-        + 'static,
+        handler: impl Fn(Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync + 'static,
     ) {
-        let scoped_method = format!("{}:{}", self.session_id, method);
-        info!(method = %scoped_method, "registering session-scoped RPC handler");
-        self.ws.register_rpc(&scoped_method, handler).await;
+        let scoped = rpc::scoped_method(&self.session_id, method);
+        info!(method = %scoped, "registering session-scoped RPC handler");
+        self.ws.register_rpc(&scoped, handler).await;
         self.ws
             .emit(
                 "rpc-register",
-                json!({
-                    "method": scoped_method,
-                }),
+                serde_json::to_value(&RpcRegisterRequest { method: scoped }).unwrap_or_default(),
             )
             .await;
     }
@@ -310,26 +320,23 @@ impl RpcRegistry for WsSessionClient {
         F: Fn(Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Value> + Send + 'static,
     {
-        let scoped_method = format!("{}:{}", self.session_id, method);
+        let scoped = rpc::scoped_method(&self.session_id, method);
         let ws = self.ws.clone();
         let boxed_handler = move |params: Value| -> Pin<Box<dyn Future<Output = Value> + Send>> {
             Box::pin(handler(params))
         };
         async move {
-            info!(method = %scoped_method, "registering session-scoped RPC handler");
-            ws.register_rpc(&scoped_method, boxed_handler).await;
+            info!(method = %scoped, "registering session-scoped RPC handler");
+            ws.register_rpc(&scoped, boxed_handler).await;
             ws.emit(
                 "rpc-register",
-                json!({
-                    "method": scoped_method,
-                }),
+                serde_json::to_value(&RpcRegisterRequest { method: scoped }).unwrap_or_default(),
             )
             .await;
         }
     }
 }
 
-/// Apply versioned ack, updating local state.
 async fn apply_versioned_ack<T: serde::de::DeserializeOwned + Clone>(
     ack: &Value,
     value_key: &str,
