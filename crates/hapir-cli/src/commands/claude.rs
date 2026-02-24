@@ -1,12 +1,15 @@
+use std::env;
 use anyhow::{Result, bail};
 use clap::Parser;
 use tracing::{debug, error};
 
 use crate::commands::common;
-use crate::modules::claude::run::{StartOptions, run_claude};
+use crate::modules::claude::run::{run_claude, ClaudeStartOptions};
 use crate::modules::claude::version_check::check_claude_version;
 use hapir_infra::config::CliConfiguration;
 use hapir_shared::modes::PermissionMode;
+use hapir_shared::schemas::SessionStartedBy;
+use crate::agent::session_base::SessionMode;
 
 /// Parsed arguments for the claude (default) command.
 #[derive(Parser, Debug, Default)]
@@ -55,13 +58,25 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
         None
     };
 
+    let working_directory = env::current_dir()?.to_string_lossy().to_string();
     // Full init: token, machine, runner
     let runner_port = common::full_init(&mut config).await?;
 
-    let options = StartOptions {
+    let started_by = match args.started_by.as_deref() {
+        Some("runner") => SessionStartedBy::Runner,
+        _ => SessionStartedBy::Terminal,
+    };
+    let starting_mode = args.hapir_starting_mode.as_deref().map(|s| match s {
+        "remote" => SessionMode::Remote,
+        "local" => SessionMode::Local,
+        other => panic!("Unsupported starting mode: {}", other),
+    });
+
+    let options = ClaudeStartOptions {
+        working_directory,
         model: args.model,
         permission_mode,
-        starting_mode: args.hapir_starting_mode,
+        starting_mode,
         should_start_runner: Some(true),
         claude_env_vars: None,
         claude_args: if args.passthrough_args.is_empty() {
@@ -69,7 +84,7 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
         } else {
             Some(args.passthrough_args)
         },
-        started_by: args.started_by,
+        started_by,
         runner_port,
     };
 

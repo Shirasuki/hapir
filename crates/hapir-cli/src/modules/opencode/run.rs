@@ -216,19 +216,37 @@ async fn opencode_remote_launcher(
         }
     }
 }
+pub struct OpencodeStartOptions {
+    pub working_directory: String,
+    pub runner_port: Option<u16>,
+    pub started_by: SessionStartedBy,
+    pub starting_mode: Option<SessionMode>,
+    pub resume: Option<String>,
+}
+
 /// Entry point for running an OpenCode agent session.
-pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::Result<()> {
-    debug!("[runOpenCode] Starting in {}", working_directory);
+pub async fn run_opencode(options: OpencodeStartOptions) -> anyhow::Result<()> {
+    let working_directory = options.working_directory;
+    let started_by = options.started_by;
+    let starting_mode = options.starting_mode.unwrap_or(match started_by {
+        SessionStartedBy::Terminal => SessionMode::Local,
+        SessionStartedBy::Runner => SessionMode::Remote,
+    });
+
+    debug!(
+        "[runOpenCode] Starting in {} (startedBy={:?}, mode={:?})",
+        working_directory, started_by, starting_mode
+    );
 
     let config = CliConfiguration::new()?;
     let bootstrap = bootstrap_session(
         SessionBootstrapOptions {
             flavor: "opencode".to_string(),
-            started_by: Some(SessionStartedBy::Terminal),
-            working_directory: Some(working_directory.to_string()),
+            started_by: Some(started_by),
+            working_directory: Some(working_directory.clone()),
             tag: None,
             agent_state: Some(serde_json::json!({
-                "controlledByUser": true,
+                "controlledByUser": starting_mode == SessionMode::Local,
             })),
         },
         &config,
@@ -246,7 +264,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
 
     debug!("[runOpenCode] Session bootstrapped: {}", session_id);
 
-    if let Some(port) = runner_port {
+    if let Some(port) = options.runner_port {
         let pid = std::process::id();
         if let Err(e) = hapir_runner::control_client::notify_session_started(
             port,
@@ -268,7 +286,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
     });
     lifecycle.register_process_handlers();
 
-    set_controlled_by_user(&ws_client, SessionMode::Local).await;
+    set_controlled_by_user(&ws_client, starting_mode).await;
     let initial_mode = OpencodeMode::default();
     let queue = Arc::new(MessageQueue2::new(compute_mode_hash));
 
@@ -276,12 +294,12 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
     let session_base = AgentSessionBase::new(AgentSessionBaseOptions {
         api: api.clone(),
         ws_client: ws_client.clone(),
-        path: working_directory.to_string(),
+        path: working_directory.clone(),
         log_path,
         session_id: None,
         queue: queue.clone(),
         on_mode_change_cb: on_mode_change,
-        mode: SessionMode::Local,
+        mode: starting_mode,
         session_label: "opencode".to_string(),
         session_id_label: "opencodeSessionId".to_string(),
         apply_session_id_to_metadata: Box::new(|mut metadata, sid| {
@@ -390,7 +408,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
 
     // Set up terminal manager
     let terminal_mgr =
-        crate::terminal::setup_terminal(&ws_client, &session_id, working_directory).await;
+        crate::terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
 
     ws_client.connect(Duration::from_secs(10)).await;
 
@@ -400,7 +418,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
 
     let loop_result = run_local_remote_session(LoopOptions {
         session: session_base.clone(),
-        starting_mode: Some(SessionMode::Local),
+        starting_mode: Some(starting_mode),
         log_tag: "runOpenCode".to_string(),
         run_local: Box::new(move |_base| {
             let s = sb_for_local.clone();
@@ -412,7 +430,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
             Box::pin(async move { opencode_remote_launcher(&s, &b).await })
         }),
         on_session_ready: None,
-        terminal_reclaim: false,
+        terminal_reclaim: started_by == SessionStartedBy::Terminal,
     })
     .await;
 

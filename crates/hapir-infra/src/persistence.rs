@@ -1,4 +1,4 @@
-use std::fs::{write, OpenOptions};
+use std::fs::{create_dir_all, write, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -51,7 +51,7 @@ pub fn read_settings(path: &Path) -> Result<Settings> {
 
 pub fn write_settings(path: &Path, settings: &Settings) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     let content = serde_json::to_string_pretty(settings)?;
     write(path, content)?;
@@ -65,7 +65,7 @@ pub fn update_settings(path: &Path, updater: impl FnOnce(&mut Settings)) -> Resu
     const STALE_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
 
     let lock_path = path.with_extension("json.lock");
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn settings_roundtrip() {
         let dir = std::env::temp_dir().join("hapir_test_settings");
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = create_dir_all(&dir);
         let path = dir.join("settings.json");
         let _ = std::fs::remove_file(&path);
 
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn update_settings_atomic() {
         let dir = std::env::temp_dir().join("hapir_test_update");
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = create_dir_all(&dir);
         let path = dir.join("settings.json");
         let _ = std::fs::remove_file(&path);
 
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn runner_state_roundtrip() {
         let dir = std::env::temp_dir().join("hapir_test_runner");
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = create_dir_all(&dir);
         let path = dir.join("runner.state.json");
         let _ = std::fs::remove_file(&path);
 

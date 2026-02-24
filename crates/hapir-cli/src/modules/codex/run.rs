@@ -31,20 +31,6 @@ use hapir_runner::control_client::notify_session_started;
 use super::session_scanner::CodexSessionScanner;
 use super::{CodexMode, compute_mode_hash};
 
-fn resolve_starting_mode(mode_str: Option<&str>, started_by: SharedStartedBy) -> SessionMode {
-    if let Some(s) = mode_str {
-        match s {
-            "remote" => return SessionMode::Remote,
-            "local" => return SessionMode::Local,
-            _ => {}
-        }
-    }
-    match started_by {
-        SharedStartedBy::Terminal => SessionMode::Local,
-        SharedStartedBy::Runner => SessionMode::Remote,
-    }
-}
-
 pub(crate) fn codex_message(data: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "role": "assistant",
@@ -110,23 +96,25 @@ async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
     }
 }
 
-pub async fn run(
-    working_directory: &str,
-    runner_port: Option<u16>,
-    started_by: Option<&str>,
-    hapir_starting_mode: Option<&str>,
-    model: Option<&str>,
-    yolo: bool,
-    resume: Option<&str>,
-) -> anyhow::Result<()> {
-    let working_directory = working_directory.to_string();
+pub struct CodexStartOptions {
+    pub working_directory: String,
+    pub runner_port: Option<u16>,
+    pub started_by: SharedStartedBy,
+    pub starting_mode: Option<SessionMode>,
+    pub model: Option<String>,
+    pub yolo: bool,
+    pub resume: Option<String>,
+}
+
+pub async fn run_codex(options: CodexStartOptions) -> anyhow::Result<()> {
+    let working_directory = options.working_directory;
 
     save_terminal_state();
-    let started_by = match started_by {
-        Some("runner") => SharedStartedBy::Runner,
-        _ => SharedStartedBy::Terminal,
-    };
-    let starting_mode = resolve_starting_mode(hapir_starting_mode, started_by);
+    let started_by = options.started_by;
+    let starting_mode = options.starting_mode.unwrap_or(match started_by {
+        SharedStartedBy::Terminal => SessionMode::Local,
+        SharedStartedBy::Runner => SessionMode::Remote,
+    });
 
     debug!(
         "[runCodex] Starting in {} (startedBy={:?}, mode={:?})",
@@ -158,7 +146,7 @@ pub async fn run(
 
     debug!("[runCodex] Session bootstrapped: {}", session_id);
 
-    if let Some(port) = runner_port {
+    if let Some(port) = options.runner_port {
         let pid = std::process::id();
         if let Err(e) = notify_session_started(
             port,
@@ -183,7 +171,7 @@ pub async fn run(
     set_controlled_by_user(&ws_client, starting_mode).await;
 
     let initial_mode = CodexMode {
-        model: model.map(|s| s.to_string()),
+        model: options.model,
         ..Default::default()
     };
     let queue = Arc::new(MessageQueue2::new(compute_mode_hash));
@@ -210,7 +198,7 @@ pub async fn run(
 
     // Build codex app-server args
     let mut codex_args = vec!["app-server".to_string()];
-    if yolo {
+    if options.yolo {
         codex_args.push("--full-auto".to_string());
     }
     let backend = Arc::new(CodexAppServerBackend::new(
@@ -481,7 +469,7 @@ pub async fn run(
     let sb_for_local = session_base.clone();
     let sb_for_remote = session_base.clone();
     let backend_for_remote = backend.clone();
-    let resume_thread_id: Option<String> = resume.map(|s| s.to_string());
+    let resume_thread_id: Option<String> = options.resume;
     let attachments_for_remote = pending_attachments.clone();
 
     let loop_result = run_local_remote_session(LoopOptions {

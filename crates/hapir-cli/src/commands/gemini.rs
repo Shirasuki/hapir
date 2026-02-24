@@ -1,9 +1,14 @@
+use std::env;
 use anyhow::Result;
 use clap::Parser;
 use tracing::debug;
-
+use gemini::run::run_gemini;
 use crate::commands::common;
 use hapir_infra::config::CliConfiguration;
+use crate::modules::gemini;
+use crate::modules::gemini::run::GeminiStartOptions;
+use crate::agent::session_base::SessionMode;
+use hapir_shared::schemas::SessionStartedBy;
 
 /// Parsed arguments for the gemini command.
 #[derive(Parser, Debug, Default)]
@@ -33,7 +38,23 @@ pub async fn run(args: GeminiArgs) -> Result<()> {
     let mut config = CliConfiguration::new()?;
     let runner_port = common::full_init(&mut config).await?;
 
-    let working_directory = std::env::current_dir()?.to_string_lossy().to_string();
+    let working_directory = env::current_dir()?.to_string_lossy().to_string();
 
-    crate::modules::gemini::run::run(&working_directory, runner_port).await
+    let started_by = match args.started_by.as_deref() {
+        Some("runner") => SessionStartedBy::Runner,
+        _ => SessionStartedBy::Terminal,
+    };
+    let starting_mode = args.hapir_starting_mode.as_deref().map(|s| match s {
+        "remote" => SessionMode::Remote,
+        "local" => SessionMode::Local,
+        other => panic!("Unsupported starting mode: {}", other),
+    });
+
+    run_gemini(GeminiStartOptions {
+        working_directory,
+        runner_port,
+        started_by,
+        starting_mode,
+    })
+    .await
 }

@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::select;
 use tracing::{debug, info, warn};
 
-use super::run::EnhancedMode;
+use super::run::ClaudeEnhancedMode;
 
 /// Local launcher for Claude.
 ///
@@ -18,7 +18,7 @@ use super::run::EnhancedMode;
 ///
 /// Listens for `switch_notify` to allow external mode-switch requests
 /// (e.g. from the web UI) to kill the TUI and trigger a switch to remote.
-pub async fn claude_local_launcher(session: &Arc<ClaudeSession<EnhancedMode>>) -> LoopResult {
+pub async fn claude_local_launcher(session: &Arc<ClaudeSession<ClaudeEnhancedMode>>) -> LoopResult {
     let working_directory = session.base.path.clone();
     debug!("[claudeLocalLauncher] Starting in {}", working_directory);
 

@@ -26,15 +26,16 @@ use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
 use hapir_shared::modes::PermissionMode;
 
 /// Options for starting a Claude session.
-#[derive(Debug, Clone, Default)]
-pub struct StartOptions {
+#[derive(Debug, Clone)]
+pub struct ClaudeStartOptions {
+    pub working_directory: String,
     pub model: Option<String>,
     pub permission_mode: Option<PermissionMode>,
-    pub starting_mode: Option<String>,
+    pub starting_mode: Option<SessionMode>,
     pub should_start_runner: Option<bool>,
     pub claude_env_vars: Option<HashMap<String, String>>,
     pub claude_args: Option<Vec<String>>,
-    pub started_by: Option<String>,
+    pub started_by: SessionStartedBy,
     pub runner_port: Option<u16>,
 }
 
@@ -44,7 +45,7 @@ pub struct StartOptions {
 /// When any of these fields change, the mode hash changes, causing the message
 /// queue to treat subsequent messages as a new batch.
 #[derive(Debug, Clone, Default)]
-pub struct EnhancedMode {
+pub struct ClaudeEnhancedMode {
     pub permission_mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub fallback_model: Option<String>,
@@ -55,7 +56,7 @@ pub struct EnhancedMode {
 }
 
 /// Compute a deterministic hash of the enhanced mode for queue batching.
-fn compute_mode_hash(mode: &EnhancedMode) -> String {
+fn compute_mode_hash(mode: &ClaudeEnhancedMode) -> String {
     let mut hasher = Sha256::new();
     hasher.update(mode.permission_mode.map_or("", |p| p.as_str()));
     hasher.update("|");
@@ -77,29 +78,16 @@ fn compute_mode_hash(mode: &EnhancedMode) -> String {
 ///
 /// Bootstraps the session, starts the hook server, creates the message
 /// queue, and enters the main local/remote loop.
-pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
-    let working_directory = std::env::current_dir()?.to_string_lossy().to_string();
+pub async fn run_claude(options: ClaudeStartOptions) -> anyhow::Result<()> {
+    let working_directory = options.working_directory.clone();
 
     save_terminal_state();
 
-    let started_by = match &options.started_by {
-        Some(from) if from == "runner" => SessionStartedBy::Runner,
-        _ => SessionStartedBy::Terminal,
-    };
-    let starting_mode = {
-        if let Some(ref mode_str) = options.starting_mode {
-            match mode_str.as_str() {
-                "remote" => SessionMode::Remote,
-                "local" => SessionMode::Local,
-                _ => panic!("Unsupported starting mode: {}", mode_str),
-            }
-        } else {
-            match started_by {
-                SessionStartedBy::Terminal => SessionMode::Local,
-                SessionStartedBy::Runner => SessionMode::Remote,
-            }
-        }
-    };
+    let started_by = options.started_by;
+    let starting_mode = options.starting_mode.unwrap_or(match started_by {
+        SessionStartedBy::Terminal => SessionMode::Local,
+        SessionStartedBy::Runner => SessionMode::Remote,
+    });
 
     debug!(
         "[runClaude] Starting in {} (startedBy={:?}, mode={:?})",
@@ -160,7 +148,7 @@ pub async fn run_claude(options: StartOptions) -> anyhow::Result<()> {
 
     set_controlled_by_user(&ws_client, starting_mode).await;
 
-    let initial_mode = EnhancedMode {
+    let initial_mode = ClaudeEnhancedMode {
         permission_mode: options.permission_mode.clone(),
         model: options.model.clone(),
         ..Default::default()

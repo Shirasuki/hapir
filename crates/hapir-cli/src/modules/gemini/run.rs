@@ -24,20 +24,6 @@ use hapir_infra::ws::session_client::WsSessionClient;
 use super::{GeminiMode, compute_mode_hash};
 
 /// Resolve the starting session mode from an optional string.
-fn resolve_starting_mode(mode_str: Option<&str>, started_by: SharedStartedBy) -> SessionMode {
-    if let Some(s) = mode_str {
-        match s {
-            "remote" => return SessionMode::Remote,
-            "local" => return SessionMode::Local,
-            _ => {}
-        }
-    }
-    match started_by {
-        SharedStartedBy::Terminal => SessionMode::Local,
-        SharedStartedBy::Runner => SessionMode::Remote,
-    }
-}
-
 /// Forward an `AgentMessage` from the ACP backend to the WebSocket session.
 async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
     match msg {
@@ -92,11 +78,21 @@ async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
     }
 }
 
+pub struct GeminiStartOptions {
+    pub working_directory: String,
+    pub runner_port: Option<u16>,
+    pub started_by: SharedStartedBy,
+    pub starting_mode: Option<SessionMode>,
+}
+
 /// Entry point for running a Gemini agent session.
-pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::Result<()> {
-    let working_directory = working_directory.to_string();
-    let started_by = SharedStartedBy::Terminal;
-    let starting_mode = resolve_starting_mode(None, started_by);
+pub async fn run_gemini(options: GeminiStartOptions) -> anyhow::Result<()> {
+    let working_directory = options.working_directory;
+    let started_by = options.started_by;
+    let starting_mode = options.starting_mode.unwrap_or(match started_by {
+        SharedStartedBy::Terminal => SessionMode::Local,
+        SharedStartedBy::Runner => SessionMode::Remote,
+    });
     debug!(
         "[runGemini] Starting in {} (startedBy={:?}, mode={:?})",
         working_directory, started_by, starting_mode
@@ -127,7 +123,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
 
     debug!("[runGemini] Session bootstrapped: {}", session_id);
 
-    if let Some(port) = runner_port {
+    if let Some(port) = options.runner_port {
         let pid = std::process::id();
         if let Err(e) = hapir_runner::control_client::notify_session_started(
             port,
@@ -288,7 +284,7 @@ pub async fn run(working_directory: &str, runner_port: Option<u16>) -> anyhow::R
             Box::pin(async move { gemini_remote_launcher(&sb, &b).await })
         }),
         on_session_ready: None,
-        terminal_reclaim: false,
+        terminal_reclaim: started_by == SharedStartedBy::Terminal,
     })
     .await;
 

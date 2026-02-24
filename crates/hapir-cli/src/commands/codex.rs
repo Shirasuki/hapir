@@ -1,9 +1,14 @@
 use anyhow::Result;
 use clap::Parser;
+use std::env;
 use tracing::debug;
-
+use codex::run::run_codex;
 use crate::commands::common;
+use crate::modules::codex;
+use crate::modules::codex::run::CodexStartOptions;
+use crate::agent::session_base::SessionMode;
 use hapir_infra::config::CliConfiguration;
+use hapir_shared::schemas::SessionStartedBy;
 
 /// Parsed arguments for the codex command.
 #[derive(Parser, Debug, Default)]
@@ -36,16 +41,26 @@ pub async fn run(args: CodexArgs) -> Result<()> {
     let mut config = CliConfiguration::new()?;
     let runner_port = common::full_init(&mut config).await?;
 
-    let working_directory = std::env::current_dir()?.to_string_lossy().to_string();
+    let working_directory = env::current_dir()?.to_string_lossy().to_string();
 
-    crate::modules::codex::run::run(
-        &working_directory,
+    let started_by = match args.started_by.as_deref() {
+        Some("runner") => SessionStartedBy::Runner,
+        _ => SessionStartedBy::Terminal,
+    };
+    let starting_mode = args.hapir_starting_mode.as_deref().map(|s| match s {
+        "remote" => SessionMode::Remote,
+        "local" => SessionMode::Local,
+        other => panic!("Unsupported starting mode: {}", other),
+    });
+
+    run_codex(CodexStartOptions {
+        working_directory,
         runner_port,
-        args.started_by.as_deref(),
-        args.hapir_starting_mode.as_deref(),
-        args.model.as_deref(),
-        args.yolo,
-        args.resume.as_deref(),
-    )
+        started_by,
+        starting_mode,
+        model: args.model,
+        yolo: args.yolo,
+        resume: args.resume,
+    })
     .await
 }
