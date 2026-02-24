@@ -1,9 +1,7 @@
 use super::super::connection_manager::ConnectionManager;
 use super::super::terminal_registry::TerminalRegistry;
-use crate::store::Store;
-use crate::sync::SyncEngine;
-use crate::sync::todos::extract_todos_from_message_content;
-use hapir_shared::schemas::{DecryptedMessage, MessageDeltaData, SyncEvent};
+use crate::sync::{SyncEngine, VersionedUpdateResult};
+use hapir_shared::schemas::{MessageDeltaData, SyncEvent};
 use hapir_shared::socket::{
     MachineAliveRequest, MachineUpdateMetadataRequest, MachineUpdateStateRequest,
     RpcRegisterRequest, SessionEndRequest,
@@ -15,56 +13,17 @@ use std::time::SystemTime;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-enum AccessError {
-    NamespaceMissing,
-    AccessDenied,
-    NotFound,
-}
-
-fn resolve_session_access(store: &Store, sid: &str, namespace: &str) -> Result<(), AccessError> {
-    use crate::store::sessions;
-    if namespace.is_empty() {
-        return Err(AccessError::NamespaceMissing);
-    }
-    if sessions::get_session_by_namespace(&store.conn(), sid, namespace).is_some() {
-        return Ok(());
-    }
-    if sessions::get_session(&store.conn(), sid).is_some() {
-        return Err(AccessError::AccessDenied);
-    }
-    Err(AccessError::NotFound)
-}
-
-fn resolve_machine_access(store: &Store, mid: &str, namespace: &str) -> Result<(), AccessError> {
-    use crate::store::machines;
-    if namespace.is_empty() {
-        return Err(AccessError::NamespaceMissing);
-    }
-    if machines::get_machine_by_namespace(&store.conn(), mid, namespace).is_some() {
-        return Ok(());
-    }
-    if machines::get_machine(&store.conn(), mid).is_some() {
-        return Err(AccessError::AccessDenied);
-    }
-    Err(AccessError::NotFound)
-}
-
 async fn emit_access_error(
     conn_mgr: &ConnectionManager,
     conn_id: &str,
     scope: &str,
     id: &str,
-    err: AccessError,
+    reason: &str,
 ) {
-    let (message, code) = match err {
-        AccessError::AccessDenied => (format!("{scope} access denied"), "access-denied"),
-        AccessError::NotFound => (format!("{scope} not found"), "not-found"),
-        AccessError::NamespaceMissing => ("Namespace missing".to_string(), "namespace-missing"),
-    };
     let msg = WsMessage::event(
         "error",
         serde_json::json!({
-            "message": message, "code": code, "scope": scope, "id": id
+            "message": format!("{scope} {reason}"), "code": reason, "scope": scope, "id": id
         }),
     );
     conn_mgr
@@ -80,41 +39,38 @@ pub async fn handle_cli_event(
     data: Value,
     _request_id: Option<&str>,
     sync_engine: &Arc<SyncEngine>,
-    store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
     terminal_registry: &Arc<RwLock<TerminalRegistry>>,
 ) -> Option<Value> {
     match event {
-        "message" => handle_message(conn_id, namespace, data, sync_engine, store, conn_mgr).await,
+        "message" => handle_message(conn_id, namespace, data, sync_engine, conn_mgr).await,
         "message-delta" => {
-            handle_message_delta(conn_id, namespace, data, sync_engine, store, conn_mgr).await;
+            handle_message_delta(conn_id, namespace, data, sync_engine, conn_mgr).await;
             None
         }
         "update-metadata" => {
-            handle_update_metadata(namespace, data, store, sync_engine, conn_id, conn_mgr).await
+            handle_update_metadata(namespace, data, sync_engine, conn_id, conn_mgr).await
         }
         "update-state" => {
-            handle_update_state(namespace, data, store, sync_engine, conn_id, conn_mgr).await
+            handle_update_state(namespace, data, sync_engine, conn_id, conn_mgr).await
         }
         "session-alive" => {
-            handle_session_alive(conn_id, namespace, data, store, sync_engine, conn_mgr).await;
+            handle_session_alive(conn_id, namespace, data, sync_engine, conn_mgr).await;
             None
         }
         "session-end" => {
-            handle_session_end(conn_id, namespace, data, store, sync_engine, conn_mgr).await;
+            handle_session_end(conn_id, namespace, data, sync_engine, conn_mgr).await;
             None
         }
         "machine-alive" => {
-            handle_machine_alive(conn_id, namespace, data, store, sync_engine, conn_mgr).await;
+            handle_machine_alive(conn_id, namespace, data, sync_engine, conn_mgr).await;
             None
         }
         "machine-update-metadata" => {
-            handle_machine_update_metadata(namespace, data, store, sync_engine, conn_id, conn_mgr)
-                .await
+            handle_machine_update_metadata(namespace, data, sync_engine, conn_id, conn_mgr).await
         }
         "machine-update-state" => {
-            handle_machine_update_state(namespace, data, store, sync_engine, conn_id, conn_mgr)
-                .await
+            handle_machine_update_state(namespace, data, sync_engine, conn_id, conn_mgr).await
         }
         "rpc-register" => {
             if let Ok(req) = serde_json::from_value::<RpcRegisterRequest>(data) {
@@ -128,10 +84,6 @@ pub async fn handle_cli_event(
             }
             None
         }
-        // "rpc-response" and "rpc-request:ack" are now handled at the transport
-        // layer in ws/mod.rs before reaching this handler.
-        // "rpc-response" and "rpc-request:ack" are now handled at the transport
-        // layer in ws/mod.rs before reaching this handler.
         "rpc-response" | "rpc-request:ack" => None,
         "terminal:ready" | "terminal:output" => {
             forward_terminal_event(conn_id, event, &data, conn_mgr, terminal_registry, true).await;
@@ -158,19 +110,16 @@ async fn handle_message(
     namespace: &str,
     data: Value,
     sync_engine: &Arc<SyncEngine>,
-    store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
 ) -> Option<Value> {
     let sid = data.get("sid").and_then(|v| v.as_str())?;
     let local_id = data.get("localId").and_then(|v| v.as_str());
 
-    // Validate session access
-    if let Err(err) = resolve_session_access(store, sid, namespace) {
-        emit_access_error(conn_mgr, conn_id, "session", sid, err).await;
+    if let Err(reason) = sync_engine.resolve_session_access(sid, namespace).await {
+        emit_access_error(conn_mgr, conn_id, "session", sid, reason).await;
         return None;
     }
 
-    // Parse message content
     let raw = data.get("message")?;
     let content = if let Some(s) = raw.as_str() {
         serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.to_string()))
@@ -178,39 +127,11 @@ async fn handle_message(
         raw.clone()
     };
 
-    // Add message to store
-    let msg = {
-        use crate::store::messages;
-        match messages::add_message(&store.conn(), sid, &content, local_id) {
-            Ok(m) => m,
-            Err(_) => return None,
-        }
+    let msg = match sync_engine.add_cli_message(sid, namespace, &content, local_id) {
+        Ok(m) => m,
+        Err(_) => return None,
     };
 
-    // Extract todos
-    let todos = extract_todos_from_message_content(&content);
-    if let Some(ref todos) = todos
-        && let Ok(todos_val) = serde_json::to_value(todos)
-    {
-        use crate::store::sessions;
-        if sessions::set_session_todos(
-            &store.conn(),
-            sid,
-            Some(&todos_val),
-            msg.created_at,
-            namespace,
-        ) {
-            sync_engine
-                .handle_realtime_event(SyncEvent::SessionUpdated {
-                    session_id: sid.to_string(),
-                    namespace: Some(namespace.to_string()),
-                    data: Some(serde_json::json!({"sid": sid})),
-                })
-                .await;
-        }
-    }
-
-    // Build update and broadcast to session room (excluding sender)
     let broadcast = WsBroadcast::new(
         msg.seq,
         msg.created_at,
@@ -230,21 +151,6 @@ async fn handle_message(
         .broadcast_to_session(sid, &broadcast.to_ws_string(), Some(conn_id))
         .await;
 
-    // Emit to sync engine
-    sync_engine
-        .handle_realtime_event(SyncEvent::MessageReceived {
-            session_id: sid.to_string(),
-            namespace: Some(namespace.to_string()),
-            message: DecryptedMessage {
-                id: msg.id,
-                seq: Some(msg.seq as f64),
-                local_id: msg.local_id,
-                content: msg.content.unwrap_or(Value::Null),
-                created_at: msg.created_at as f64,
-            },
-        })
-        .await;
-
     None
 }
 
@@ -253,7 +159,6 @@ async fn handle_message_delta(
     namespace: &str,
     data: Value,
     sync_engine: &Arc<SyncEngine>,
-    store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
     let sid = match data.get("sid").and_then(|v| v.as_str()) {
@@ -261,8 +166,8 @@ async fn handle_message_delta(
         None => return,
     };
 
-    if let Err(err) = resolve_session_access(store, sid, namespace) {
-        emit_access_error(conn_mgr, conn_id, "session", sid, err).await;
+    if let Err(reason) = sync_engine.resolve_session_access(sid, namespace).await {
+        emit_access_error(conn_mgr, conn_id, "session", sid, reason).await;
         return;
     }
 
@@ -271,7 +176,6 @@ async fn handle_message_delta(
         None => return,
     };
 
-    // Broadcast delta to WebSocket clients (excluding sender)
     let now = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -289,7 +193,6 @@ async fn handle_message_delta(
         .broadcast_to_session(sid, &broadcast.to_ws_string(), Some(conn_id))
         .await;
 
-    // Emit delta via SSE
     if let Ok(delta_data) = serde_json::from_value::<MessageDeltaData>(delta) {
         sync_engine
             .handle_realtime_event(SyncEvent::MessageDelta {
@@ -304,7 +207,6 @@ async fn handle_message_delta(
 async fn handle_update_metadata(
     namespace: &str,
     data: Value,
-    store: &Arc<Store>,
     sync_engine: &Arc<SyncEngine>,
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
@@ -313,24 +215,13 @@ async fn handle_update_metadata(
     let expected_version = data.get("expectedVersion").and_then(|v| v.as_i64())?;
     let metadata = data.get("metadata")?;
 
-    use crate::store::{sessions, types::VersionedUpdateResult};
-    if let Err(err) = resolve_session_access(store, sid, namespace) {
-        return Some(serde_json::json!({"result": "error", "reason": match err {
-            AccessError::AccessDenied => "access-denied",
-            AccessError::NotFound => "not-found",
-            AccessError::NamespaceMissing => "namespace-missing",
-        }}));
+    if let Err(reason) = sync_engine.resolve_session_access(sid, namespace).await {
+        return Some(serde_json::json!({"result": "error", "reason": reason}));
     }
 
-    let metadata_val = metadata.clone();
-    let result = sessions::update_session_metadata(
-        &store.conn(),
-        sid,
-        &metadata_val,
-        expected_version,
-        namespace,
-        true,
-    );
+    let result = sync_engine
+        .update_session_metadata(sid, metadata, expected_version, namespace)
+        .await;
 
     let response = match &result {
         VersionedUpdateResult::Success { version, value } => {
@@ -351,13 +242,6 @@ async fn handle_update_metadata(
             conn_mgr
                 .broadcast_to_session(sid, &broadcast.to_ws_string(), Some(conn_id))
                 .await;
-            sync_engine
-                .handle_realtime_event(SyncEvent::SessionUpdated {
-                    session_id: sid.to_string(),
-                    namespace: Some(namespace.to_string()),
-                    data: Some(serde_json::json!({"sid": sid})),
-                })
-                .await;
             serde_json::json!({"result": "success", "version": version, "metadata": value})
         }
         VersionedUpdateResult::VersionMismatch { version, value } => {
@@ -374,7 +258,6 @@ async fn handle_update_metadata(
 async fn handle_update_state(
     namespace: &str,
     data: Value,
-    store: &Arc<Store>,
     sync_engine: &Arc<SyncEngine>,
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
@@ -383,22 +266,13 @@ async fn handle_update_state(
     let expected_version = data.get("expectedVersion").and_then(|v| v.as_i64())?;
     let agent_state = data.get("agentState");
 
-    use crate::store::{sessions, types::VersionedUpdateResult};
-    if let Err(err) = resolve_session_access(store, sid, namespace) {
-        return Some(serde_json::json!({"result": "error", "reason": match err {
-            AccessError::AccessDenied => "access-denied",
-            AccessError::NotFound => "not-found",
-            AccessError::NamespaceMissing => "namespace-missing",
-        }}));
+    if let Err(reason) = sync_engine.resolve_session_access(sid, namespace).await {
+        return Some(serde_json::json!({"result": "error", "reason": reason}));
     }
 
-    let result = sessions::update_session_agent_state(
-        &store.conn(),
-        sid,
-        agent_state,
-        expected_version,
-        namespace,
-    );
+    let result = sync_engine
+        .update_session_agent_state(sid, agent_state, expected_version, namespace)
+        .await;
 
     let response = match &result {
         VersionedUpdateResult::Success { version, value } => {
@@ -419,13 +293,6 @@ async fn handle_update_state(
             conn_mgr
                 .broadcast_to_session(sid, &broadcast.to_ws_string(), Some(conn_id))
                 .await;
-            sync_engine
-                .handle_realtime_event(SyncEvent::SessionUpdated {
-                    session_id: sid.to_string(),
-                    namespace: Some(namespace.to_string()),
-                    data: Some(serde_json::json!({"sid": sid})),
-                })
-                .await;
             serde_json::json!({"result": "success", "version": version, "agentState": value})
         }
         VersionedUpdateResult::VersionMismatch { version, value } => {
@@ -443,7 +310,6 @@ async fn handle_session_alive(
     conn_id: &str,
     namespace: &str,
     data: Value,
-    store: &Arc<Store>,
     sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
@@ -456,8 +322,8 @@ async fn handle_session_alive(
         None => return,
     };
 
-    if let Err(err) = resolve_session_access(store, &sid, namespace) {
-        emit_access_error(conn_mgr, conn_id, "session", &sid, err).await;
+    if let Err(reason) = sync_engine.resolve_session_access(&sid, namespace).await {
+        emit_access_error(conn_mgr, conn_id, "session", &sid, reason).await;
         return;
     }
 
@@ -466,7 +332,7 @@ async fn handle_session_alive(
         .get("thinkingStatus")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let _mode = data.get("mode").and_then(|v| v.as_str()); // accepted for protocol compat
+    let _mode = data.get("mode").and_then(|v| v.as_str());
     let permission_mode = data
         .get("permissionMode")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
@@ -490,7 +356,6 @@ async fn handle_session_end(
     conn_id: &str,
     namespace: &str,
     data: Value,
-    store: &Arc<Store>,
     sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
@@ -499,8 +364,8 @@ async fn handle_session_end(
         Err(_) => return,
     };
 
-    if let Err(err) = resolve_session_access(store, &req.sid, namespace) {
-        emit_access_error(conn_mgr, conn_id, "session", &req.sid, err).await;
+    if let Err(reason) = sync_engine.resolve_session_access(&req.sid, namespace).await {
+        emit_access_error(conn_mgr, conn_id, "session", &req.sid, reason).await;
         return;
     }
 
@@ -511,7 +376,6 @@ async fn handle_machine_alive(
     conn_id: &str,
     namespace: &str,
     data: Value,
-    store: &Arc<Store>,
     sync_engine: &Arc<SyncEngine>,
     conn_mgr: &Arc<ConnectionManager>,
 ) {
@@ -520,8 +384,12 @@ async fn handle_machine_alive(
         Err(_) => return,
     };
 
-    if let Err(err) = resolve_machine_access(store, &req.machine_id, namespace) {
-        emit_access_error(conn_mgr, conn_id, "machine", &req.machine_id, err).await;
+    if sync_engine
+        .get_machine_by_namespace(&req.machine_id, namespace)
+        .await
+        .is_none()
+    {
+        emit_access_error(conn_mgr, conn_id, "machine", &req.machine_id, "not-found").await;
         return;
     }
 
@@ -533,7 +401,6 @@ async fn handle_machine_alive(
 async fn handle_machine_update_metadata(
     namespace: &str,
     data: Value,
-    store: &Arc<Store>,
     sync_engine: &Arc<SyncEngine>,
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
@@ -542,22 +409,17 @@ async fn handle_machine_update_metadata(
     let mid = &req.machine_id;
     let metadata = serde_json::to_value(&req.metadata).ok()?;
 
-    use crate::store::{machines, types::VersionedUpdateResult};
-    if let Err(err) = resolve_machine_access(store, mid, namespace) {
-        return Some(serde_json::json!({"result": "error", "reason": match err {
-            AccessError::AccessDenied => "access-denied",
-            AccessError::NotFound => "not-found",
-            AccessError::NamespaceMissing => "namespace-missing",
-        }}));
+    if sync_engine
+        .get_machine_by_namespace(mid, namespace)
+        .await
+        .is_none()
+    {
+        return Some(serde_json::json!({"result": "error", "reason": "not-found"}));
     }
 
-    let result = machines::update_machine_metadata(
-        &store.conn(),
-        mid,
-        &metadata,
-        req.expected_version,
-        namespace,
-    );
+    let result = sync_engine
+        .update_machine_metadata(mid, &metadata, req.expected_version, namespace)
+        .await;
 
     let response = match &result {
         VersionedUpdateResult::Success { version, value } => {
@@ -578,13 +440,6 @@ async fn handle_machine_update_metadata(
             conn_mgr
                 .broadcast_to_machine(mid, &broadcast.to_ws_string(), Some(conn_id))
                 .await;
-            sync_engine
-                .handle_realtime_event(SyncEvent::MachineUpdated {
-                    machine_id: mid.to_string(),
-                    namespace: Some(namespace.to_string()),
-                    data: Some(serde_json::json!({"id": mid})),
-                })
-                .await;
             serde_json::json!({"result": "success", "version": version, "metadata": value})
         }
         VersionedUpdateResult::VersionMismatch { version, value } => {
@@ -601,7 +456,6 @@ async fn handle_machine_update_metadata(
 async fn handle_machine_update_state(
     namespace: &str,
     data: Value,
-    store: &Arc<Store>,
     sync_engine: &Arc<SyncEngine>,
     conn_id: &str,
     conn_mgr: &Arc<ConnectionManager>,
@@ -610,22 +464,17 @@ async fn handle_machine_update_state(
     let mid = &req.machine_id;
     let runner_state = &req.runner_state;
 
-    use crate::store::{machines, types::VersionedUpdateResult};
-    if let Err(err) = resolve_machine_access(store, mid, namespace) {
-        return Some(serde_json::json!({"result": "error", "reason": match err {
-            AccessError::AccessDenied => "access-denied",
-            AccessError::NotFound => "not-found",
-            AccessError::NamespaceMissing => "namespace-missing",
-        }}));
+    if sync_engine
+        .get_machine_by_namespace(mid, namespace)
+        .await
+        .is_none()
+    {
+        return Some(serde_json::json!({"result": "error", "reason": "not-found"}));
     }
 
-    let result = machines::update_machine_runner_state(
-        &store.conn(),
-        mid,
-        Some(runner_state),
-        req.expected_version,
-        namespace,
-    );
+    let result = sync_engine
+        .update_machine_runner_state(mid, Some(runner_state), req.expected_version, namespace)
+        .await;
 
     let response = match &result {
         VersionedUpdateResult::Success { version, value } => {
@@ -646,13 +495,6 @@ async fn handle_machine_update_state(
             conn_mgr
                 .broadcast_to_machine(mid, &broadcast.to_ws_string(), Some(conn_id))
                 .await;
-            sync_engine
-                .handle_realtime_event(SyncEvent::MachineUpdated {
-                    machine_id: mid.to_string(),
-                    namespace: Some(namespace.to_string()),
-                    data: Some(serde_json::json!({"id": mid})),
-                })
-                .await;
             serde_json::json!({"result": "success", "version": version, "runnerState": value})
         }
         VersionedUpdateResult::VersionMismatch { version, value } => {
@@ -668,8 +510,6 @@ async fn handle_machine_update_state(
 
 // ---------- Terminal event forwarding (CLI → webapp) ----------
 
-/// Forward terminal:ready, terminal:output, terminal:error from CLI to the webapp terminal socket.
-/// `should_mark_activity` is true for ready/output, false for error (matching TS behavior).
 #[inline]
 async fn forward_terminal_event(
     conn_id: &str,
@@ -705,7 +545,6 @@ async fn forward_terminal_event(
     conn_mgr.send_to(&entry.socket_id, &msg_str).await;
 }
 
-/// Handle terminal:exit from CLI — forward to webapp and remove from registry.
 async fn handle_terminal_exit_from_cli(
     conn_id: &str,
     data: &Value,
@@ -736,8 +575,6 @@ async fn handle_terminal_exit_from_cli(
     conn_mgr.send_to(&entry.socket_id, &msg_str).await;
 }
 
-/// Handle terminal:error from CLI — forward to webapp and remove from registry
-/// so the same terminal ID can be reused on retry.
 async fn handle_terminal_error_from_cli(
     conn_id: &str,
     data: &Value,

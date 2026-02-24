@@ -11,6 +11,8 @@ pub mod visibility_tracker;
 use std::sync::Arc;
 
 use crate::store::Store;
+use crate::store::types::StoredMessage;
+pub use crate::store::types::VersionedUpdateResult;
 use event_publisher::EventPublisher;
 use hapir_shared::modes::{ModelMode, PermissionMode};
 use hapir_shared::rpc::bash::RpcCommandResponse;
@@ -317,6 +319,94 @@ impl SyncEngine {
         }
 
         Ok(())
+    }
+
+    /// Add a message from CLI (already has full content, no RPC needed).
+    pub fn add_cli_message(
+        &self,
+        session_id: &str,
+        namespace: &str,
+        content: &Value,
+        local_id: Option<&str>,
+    ) -> anyhow::Result<StoredMessage> {
+        MessageService::add_cli_message(
+            &self.store,
+            &self.publisher,
+            session_id,
+            namespace,
+            content,
+            local_id,
+        )
+    }
+
+    // --- Versioned updates ---
+
+    pub async fn update_session_metadata(
+        &self,
+        session_id: &str,
+        metadata: &Value,
+        expected_version: i64,
+        namespace: &str,
+    ) -> VersionedUpdateResult<Option<Value>> {
+        self.session_cache.write().await.update_metadata(
+            session_id,
+            metadata,
+            expected_version,
+            namespace,
+            &self.store,
+            &self.publisher,
+        )
+    }
+
+    pub async fn update_session_agent_state(
+        &self,
+        session_id: &str,
+        agent_state: Option<&Value>,
+        expected_version: i64,
+        namespace: &str,
+    ) -> VersionedUpdateResult<Option<Value>> {
+        self.session_cache.write().await.update_agent_state(
+            session_id,
+            agent_state,
+            expected_version,
+            namespace,
+            &self.store,
+            &self.publisher,
+        )
+    }
+
+    pub async fn update_machine_metadata(
+        &self,
+        machine_id: &str,
+        metadata: &Value,
+        expected_version: i64,
+        namespace: &str,
+    ) -> VersionedUpdateResult<Option<Value>> {
+        self.machine_cache.write().await.update_metadata(
+            machine_id,
+            metadata,
+            expected_version,
+            namespace,
+            &self.store,
+            &self.publisher,
+        )
+    }
+
+    pub async fn update_machine_runner_state(
+        &self,
+        machine_id: &str,
+        runner_state: Option<&Value>,
+        expected_version: i64,
+        namespace: &str,
+    ) -> VersionedUpdateResult<Option<Value>> {
+        self.machine_cache.write().await.update_runner_state(
+            machine_id,
+            runner_state,
+            expected_version,
+            namespace,
+            &self.store,
+            &self.publisher,
+        )
     }
 
     // --- Realtime event handling ---

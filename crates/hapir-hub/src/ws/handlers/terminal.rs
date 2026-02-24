@@ -6,7 +6,6 @@ use tracing::{debug, warn};
 
 use super::super::connection_manager::{ConnectionManager, WsConnType};
 use super::super::terminal_registry::TerminalRegistry;
-use crate::store::Store;
 use crate::sync::SyncEngine;
 use hapir_shared::ws_protocol::WsMessage;
 
@@ -28,7 +27,6 @@ pub async fn handle_terminal_event(
     event: &str,
     data: Value,
     sync_engine: &Arc<SyncEngine>,
-    store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
     terminal_registry: &Arc<RwLock<TerminalRegistry>>,
     max_terminals_per_socket: usize,
@@ -42,7 +40,6 @@ pub async fn handle_terminal_event(
                 namespace,
                 data,
                 sync_engine,
-                store,
                 conn_mgr,
                 terminal_registry,
                 max_terminals_per_socket,
@@ -74,7 +71,6 @@ async fn handle_terminal_create(
     namespace: &str,
     data: Value,
     sync_engine: &Arc<SyncEngine>,
-    _store: &Arc<Store>,
     conn_mgr: &Arc<ConnectionManager>,
     terminal_registry: &Arc<RwLock<TerminalRegistry>>,
     max_per_socket: usize,

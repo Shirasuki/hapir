@@ -4,7 +4,6 @@ pub mod rpc_registry;
 pub mod terminal_registry;
 
 use crate::config::cli_api_token;
-use crate::store::Store;
 use crate::sync::SyncEngine;
 use axum::http::StatusCode;
 use axum::{
@@ -34,7 +33,6 @@ pub(crate) const DEFAULT_IDLE_TIMEOUT_MS: u64 = 15 * 60_000;
 /// Shared state for WebSocket handlers.
 #[derive(Clone)]
 pub struct WsState {
-    pub store: Arc<Store>,
     pub sync_engine: Arc<SyncEngine>,
     pub conn_mgr: Arc<ConnectionManager>,
     pub terminal_registry: Arc<RwLock<TerminalRegistry>>,
@@ -271,7 +269,6 @@ async fn handle_cli_ws(
             data,
             request_id.as_deref(),
             &state.sync_engine,
-            &state.store,
             &state.conn_mgr,
             &state.terminal_registry,
         )
@@ -377,7 +374,6 @@ async fn handle_terminal_ws(socket: WebSocket, state: WsState, namespace: String
             &event,
             data,
             &state.sync_engine,
-            &state.store,
             &state.conn_mgr,
             &state.terminal_registry,
             state.max_terminals_per_socket,

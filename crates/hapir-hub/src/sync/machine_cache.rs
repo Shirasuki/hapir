@@ -8,6 +8,7 @@ use serde_json::Value;
 use super::alive_time::clamp_alive_time;
 use super::event_publisher::EventPublisher;
 use crate::store::Store;
+use crate::store::types::VersionedUpdateResult;
 
 const MACHINE_TIMEOUT_MS: i64 = 45_000;
 
@@ -218,6 +219,58 @@ impl MachineCache {
         });
 
         Some(machine)
+    }
+
+    pub fn update_metadata(
+        &mut self,
+        machine_id: &str,
+        metadata: &Value,
+        expected_version: i64,
+        namespace: &str,
+        store: &Store,
+        publisher: &EventPublisher,
+    ) -> VersionedUpdateResult<Option<Value>> {
+        use crate::store::machines;
+
+        let result = machines::update_machine_metadata(
+            &store.conn(),
+            machine_id,
+            metadata,
+            expected_version,
+            namespace,
+        );
+
+        if matches!(result, VersionedUpdateResult::Success { .. }) {
+            self.refresh_machine(machine_id, store, publisher);
+        }
+
+        result
+    }
+
+    pub fn update_runner_state(
+        &mut self,
+        machine_id: &str,
+        runner_state: Option<&Value>,
+        expected_version: i64,
+        namespace: &str,
+        store: &Store,
+        publisher: &EventPublisher,
+    ) -> VersionedUpdateResult<Option<Value>> {
+        use crate::store::machines;
+
+        let result = machines::update_machine_runner_state(
+            &store.conn(),
+            machine_id,
+            runner_state,
+            expected_version,
+            namespace,
+        );
+
+        if matches!(result, VersionedUpdateResult::Success { .. }) {
+            self.refresh_machine(machine_id, store, publisher);
+        }
+
+        result
     }
 
     pub fn reload_all(&mut self, store: &Store, publisher: &EventPublisher) {

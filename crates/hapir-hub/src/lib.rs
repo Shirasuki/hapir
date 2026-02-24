@@ -126,7 +126,6 @@ fn build_app(core: &HubCore, engine: &HubEngine) -> (Router, Arc<RwLock<Terminal
         ws::DEFAULT_IDLE_TIMEOUT_MS,
     )));
     let ws_state = WsState {
-        store: core.store.clone(),
         sync_engine: engine.sync_engine.clone(),
         conn_mgr: engine.conn_mgr.clone(),
         terminal_registry: terminal_registry.clone(),

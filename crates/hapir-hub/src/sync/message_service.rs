@@ -2,7 +2,9 @@ use hapir_shared::schemas::{AttachmentMetadata, DecryptedMessage, SyncEvent};
 use serde_json::Value;
 
 use super::event_publisher::EventPublisher;
+use super::todos::extract_todos_from_message_content;
 use crate::store::Store;
+use crate::store::types::StoredMessage;
 
 /// Pagination info for message queries.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -124,5 +126,52 @@ impl MessageService {
         });
 
         Ok(())
+    }
+
+    /// Add a message from CLI. The CLI already has the full content, so no RPC is needed.
+    /// Handles todo extraction and emits appropriate events.
+    pub fn add_cli_message(
+        store: &Store,
+        publisher: &EventPublisher,
+        session_id: &str,
+        namespace: &str,
+        content: &Value,
+        local_id: Option<&str>,
+    ) -> anyhow::Result<StoredMessage> {
+        use crate::store::{messages, sessions};
+
+        let msg = messages::add_message(&store.conn(), session_id, content, local_id)?;
+
+        // Extract and persist todos if present
+        if let Some(todos) = extract_todos_from_message_content(content)
+            && let Ok(todos_val) = serde_json::to_value(&todos)
+            && sessions::set_session_todos(
+                &store.conn(),
+                session_id,
+                Some(&todos_val),
+                msg.created_at,
+                namespace,
+            )
+        {
+            publisher.emit(SyncEvent::SessionUpdated {
+                session_id: session_id.to_string(),
+                namespace: Some(namespace.to_string()),
+                data: Some(serde_json::json!({"sid": session_id})),
+            });
+        }
+
+        publisher.emit(SyncEvent::MessageReceived {
+            session_id: session_id.to_string(),
+            namespace: Some(namespace.to_string()),
+            message: DecryptedMessage {
+                id: msg.id.clone(),
+                seq: Some(msg.seq as f64),
+                local_id: msg.local_id.clone(),
+                content: msg.content.clone().unwrap_or(Value::Null),
+                created_at: msg.created_at as f64,
+            },
+        });
+
+        Ok(msg)
     }
 }

@@ -9,6 +9,7 @@ use super::alive_time::clamp_alive_time;
 use super::event_publisher::EventPublisher;
 use super::todos::extract_todos_from_message_content;
 use crate::store::Store;
+use crate::store::types::VersionedUpdateResult;
 
 const SESSION_TIMEOUT_MS: i64 = 30_000;
 
@@ -217,6 +218,59 @@ impl SessionCache {
     }
 
     // PLACEHOLDER_SESSION_CACHE_PART2
+
+    pub fn update_metadata(
+        &mut self,
+        session_id: &str,
+        metadata: &Value,
+        expected_version: i64,
+        namespace: &str,
+        store: &Store,
+        publisher: &EventPublisher,
+    ) -> VersionedUpdateResult<Option<Value>> {
+        use crate::store::sessions;
+
+        let result = sessions::update_session_metadata(
+            &store.conn(),
+            session_id,
+            metadata,
+            expected_version,
+            namespace,
+            true,
+        );
+
+        if matches!(result, VersionedUpdateResult::Success { .. }) {
+            self.refresh_session(session_id, store, publisher);
+        }
+
+        result
+    }
+
+    pub fn update_agent_state(
+        &mut self,
+        session_id: &str,
+        agent_state: Option<&Value>,
+        expected_version: i64,
+        namespace: &str,
+        store: &Store,
+        publisher: &EventPublisher,
+    ) -> VersionedUpdateResult<Option<Value>> {
+        use crate::store::sessions;
+
+        let result = sessions::update_session_agent_state(
+            &store.conn(),
+            session_id,
+            agent_state,
+            expected_version,
+            namespace,
+        );
+
+        if matches!(result, VersionedUpdateResult::Success { .. }) {
+            self.refresh_session(session_id, store, publisher);
+        }
+
+        result
+    }
 
     pub fn reload_all(&mut self, store: &Store, publisher: &EventPublisher) {
         use crate::store::sessions;

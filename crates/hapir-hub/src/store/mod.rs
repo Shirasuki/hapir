@@ -4,7 +4,7 @@ pub mod push_subscriptions;
 pub mod sessions;
 pub mod types;
 pub mod users;
-pub mod versioned_updates;
+pub(super) mod versioned_updates;
 
 use anyhow::{Context, Result};
 use r2d2::Pool;
