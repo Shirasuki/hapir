@@ -48,7 +48,7 @@ fn sanitize_filename(filename: &str) -> String {
 
 pub async fn register_upload_handlers(rpc: &(impl RpcRegistry + Sync), _working_directory: &str) {
     // uploadFile handler
-    rpc.register("uploadFile", move |params: Value| async move {
+    rpc.register_rpc("uploadFile", move |params: Value| async move {
         let mut response = RpcUploadFileResponse::default();
         let req = match serde_json::from_value::<RpcUploadFileRequest>(params) {
             Ok(r) if !r.filename.is_empty() && !r.content.is_empty() => r,
@@ -108,7 +108,7 @@ pub async fn register_upload_handlers(rpc: &(impl RpcRegistry + Sync), _working_
     .await;
 
     // deleteUpload handler
-    rpc.register("deleteUpload", move |params: Value| async move {
+    rpc.register_rpc("deleteUpload", move |params: Value| async move {
         let mut resp = RpcDeleteUploadResponse::default();
         let req = match serde_json::from_value::<RpcDeleteUploadRequest>(params) {
             Ok(r) if !r.path.trim().is_empty() => r,

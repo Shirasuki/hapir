@@ -75,7 +75,7 @@ pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_dire
     // git-status
     {
         let wd = wd.clone();
-        rpc.register("git-status", move |params: Value| {
+        rpc.register_rpc("git-status", move |params: Value| {
             let wd = wd.clone();
             async move {
                 let req: RpcGitStatusRequest = serde_json::from_value(params).unwrap_or_default();
@@ -108,7 +108,7 @@ pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_dire
     // git-diff-numstat
     {
         let wd = wd.clone();
-        rpc.register("git-diff-numstat", move |params: Value| {
+        rpc.register_rpc("git-diff-numstat", move |params: Value| {
             let wd = wd.clone();
             async move {
                 let req: RpcGitDiffNumstatRequest =
@@ -139,7 +139,7 @@ pub async fn register_git_handlers(rpc: &(impl RpcRegistry + Sync), working_dire
     // git-diff-file
     {
         let wd = wd.clone();
-        rpc.register("git-diff-file", move |params: Value| {
+        rpc.register_rpc("git-diff-file", move |params: Value| {
             let wd = wd.clone();
             async move {
                 let mut response = RpcCommandResponse::default();

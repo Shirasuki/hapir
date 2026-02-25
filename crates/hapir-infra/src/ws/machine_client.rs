@@ -282,7 +282,7 @@ impl WsMachineClient {
 }
 
 impl RpcRegistry for WsMachineClient {
-    fn register<F, Fut>(&self, method: &str, handler: F) -> impl Future<Output = ()> + Send
+    fn register_rpc<F, Fut>(&self, method: &str, handler: F) -> impl Future<Output = ()> + Send
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Value> + Send + 'static,

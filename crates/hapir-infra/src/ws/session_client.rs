@@ -16,9 +16,10 @@ use hapir_shared::socket::{
 use hapir_shared::ws_protocol::WsBroadcast;
 
 use super::client::{WsClient, WsClientConfig, WsClientType};
-use crate::rpc::{self, RpcRegistry};
+use crate::rpc::{self, EventRegistry, RpcRegistry};
 use crate::utils::time::epoch_ms;
 
+#[derive(Clone)]
 pub struct WsSessionClient {
     ws: Arc<WsClient>,
     session_id: String,
@@ -303,7 +304,7 @@ impl WsSessionClient {
 }
 
 impl RpcRegistry for WsSessionClient {
-    fn register<F, Fut>(&self, method: &str, handler: F) -> impl Future<Output = ()> + Send
+    fn register_rpc<F, Fut>(&self, method: &str, handler: F) -> impl Future<Output = ()> + Send
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Value> + Send + 'static,
@@ -322,6 +323,24 @@ impl RpcRegistry for WsSessionClient {
             )
             .await;
         }
+    }
+}
+
+impl EventRegistry for WsSessionClient {
+    fn on(
+        &self,
+        event: impl Into<String> + Send,
+        handler: impl Fn(Value) + Send + Sync + 'static,
+    ) -> impl Future<Output = ()> + Send {
+        self.ws.on(event, handler)
+    }
+
+    fn emit(
+        &self,
+        event: impl Into<String> + Send,
+        data: Value,
+    ) -> impl Future<Output = ()> + Send {
+        self.ws.emit(event, data)
     }
 }
 

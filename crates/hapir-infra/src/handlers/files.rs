@@ -21,7 +21,7 @@ pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
     // readFile handler
     {
         let wd = wd.clone();
-        rpc.register("readFile", move |params: Value| {
+        rpc.register_rpc("readFile", move |params: Value| {
             let wd = wd.clone();
             async move {
                 let mut response = RpcReadFileResponse::default();
@@ -63,7 +63,7 @@ pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
     // writeFile handler
     {
         let wd = wd.clone();
-        rpc.register("writeFile", move |params: Value| {
+        rpc.register_rpc("writeFile", move |params: Value| {
             let wd = wd.clone();
             async move {
                 let mut response = RpcWriteFileResponse::default();

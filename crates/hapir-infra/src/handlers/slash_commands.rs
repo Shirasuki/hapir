@@ -145,7 +145,7 @@ pub async fn register_slash_command_handlers(
     rpc: &(impl RpcRegistry + Sync),
     _working_directory: &str,
 ) {
-    rpc.register("listSlashCommands", move |params: Value| async move {
+    rpc.register_rpc("listSlashCommands", move |params: Value| async move {
         let mut response = RpcListSlashCommandsResponse::default();
         let req: RpcListSlashCommandsRequest = serde_json::from_value(params).unwrap_or_default();
         debug!("listSlashCommands for agent={}", req.agent);

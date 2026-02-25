@@ -19,7 +19,7 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
     // listDirectory handler
     {
         let wd = wd.clone();
-        rpc.register("listDirectory", move |params: Value| {
+        rpc.register_rpc("listDirectory", move |params: Value| {
             let wd = wd.clone();
             async move {
                 let req = serde_json::from_value(params)
@@ -104,7 +104,7 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
     // getDirectoryTree handler
     {
         let wd = wd.clone();
-        rpc.register("getDirectoryTree", move |params: Value| {
+        rpc.register_rpc("getDirectoryTree", move |params: Value| {
             let wd = wd.clone();
             async move {
                 let req = serde_json::from_value(params)

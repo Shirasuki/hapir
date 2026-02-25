@@ -13,7 +13,7 @@ use crate::utils::path_security::validate_path;
 pub async fn register_ripgrep_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = Arc::new(working_directory.to_string());
 
-    rpc.register("ripgrep", move |params: Value| {
+    rpc.register_rpc("ripgrep", move |params: Value| {
         let wd = wd.clone();
         async move {
             let mut response = RpcCommandResponse::default();

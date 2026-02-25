@@ -129,7 +129,7 @@ async fn list_skills_impl(agent: &str) -> Vec<RpcSkillSummary> {
 }
 
 pub async fn register_skills_handlers(rpc: &(impl RpcRegistry + Sync), _working_directory: &str) {
-    rpc.register("listSkills", move |params: Value| async move {
+    rpc.register_rpc("listSkills", move |params: Value| async move {
         let mut response = RpcListSkillsResponse::default();
         let req: RpcListSkillsRequest = serde_json::from_value(params).unwrap_or_default();
         let skills = list_skills_impl(&req.agent).await;

@@ -13,7 +13,7 @@ use crate::utils::shell::{default_shell, shell_command_flag};
 pub async fn register_bash_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = working_directory.to_string();
 
-    rpc.register("bash", move |params: Value| {
+    rpc.register_rpc("bash", move |params: Value| {
         let wd = wd.clone();
         async move {
             let mut response = RpcCommandResponse::default();

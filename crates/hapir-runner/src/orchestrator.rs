@@ -330,7 +330,7 @@ async fn connect_to_hub(
     ));
 
     let rs = runner_state.clone();
-    ws.register("spawn-happy-session", move |data| {
+    ws.register_rpc("spawn-happy-session", move |data| {
         let rs = rs.clone();
         Box::pin(async move {
             let req: crate::types::SpawnSessionRequest =
@@ -361,7 +361,7 @@ async fn connect_to_hub(
     }).await;
 
     let rs = runner_state.clone();
-    ws.register("stop-session", move |data| {
+    ws.register_rpc("stop-session", move |data| {
         let rs = rs.clone();
         Box::pin(async move {
             let session_id = data.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
@@ -381,7 +381,7 @@ async fn connect_to_hub(
     // PLACEHOLDER_MORE_RPC
 
     let rs = runner_state.clone();
-    ws.register("stop-runner", move |_data| {
+    ws.register_rpc("stop-runner", move |_data| {
         let rs = rs.clone();
         Box::pin(async move {
             let rs2 = rs.clone();
@@ -394,7 +394,7 @@ async fn connect_to_hub(
     })
     .await;
 
-    ws.register("path-exists", move |data| {
+    ws.register_rpc("path-exists", move |data| {
         Box::pin(async move {
             let paths = data
                 .get("paths")
