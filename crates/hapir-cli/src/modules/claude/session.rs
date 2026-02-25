@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-
+use std::time::SystemTime;
 use crate::agent::common_rpc::register_switch_handler;
 use crate::agent::session_base::AgentSessionBase;
 use hapir_infra::rpc::{RpcHandlerGroup, RpcRegistry};
@@ -120,7 +120,7 @@ impl<Mode: Clone + Send + 'static> RpcHandlerGroup<WsSessionClient> for ClaudeSe
 
                         let id_clone = id.to_string();
                         let status = if approved { "approved" } else { "denied" };
-                        let completed_at = std::time::SystemTime::now()
+                        let completed_at = SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
                             .as_millis() as f64;

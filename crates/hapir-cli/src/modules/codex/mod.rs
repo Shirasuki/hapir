@@ -2,7 +2,10 @@ use hapir_shared::modes::PermissionMode;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+mod local_launcher;
+mod remote_launcher;
 pub mod run;
+mod session;
 mod session_scanner;
 
 #[derive(Debug, Clone, Default, Hash)]
