@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::alive_time::clamp_alive_time;
 use super::event_publisher::EventPublisher;
-use super::todos::extract_todos_from_message_content;
+use super::todo_extraction::extract_todos_from_message_content;
 use crate::store::Store;
 use crate::store::types::VersionedUpdateResult;
 

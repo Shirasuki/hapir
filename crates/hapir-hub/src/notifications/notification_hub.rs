@@ -8,7 +8,7 @@ use tracing::{error, trace, warn};
 
 use crate::sync::SyncEngine;
 
-use super::event_parsing::extract_message_event_type;
+use super::message_event_type::extract_message_event_type;
 use super::push_channel::NotificationChannel;
 
 struct HubState {

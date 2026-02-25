@@ -7,7 +7,7 @@ use hapir_shared::schemas::Session;
 use crate::sync::SyncEngine;
 
 use super::api::{InlineKeyboardMarkup, TelegramApi};
-use super::renderer::{find_session_by_prefix, parse_callback_data};
+use super::callback_data::{find_session_by_prefix, parse_callback_data};
 
 pub const APPROVE_ACTION: &str = "ap";
 pub const DENY_ACTION: &str = "dn";

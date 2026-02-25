@@ -7,7 +7,7 @@ use tracing::debug;
 use hapir_shared::rpc::bash::{RpcBashRequest, RpcCommandResponse};
 
 use crate::rpc::RpcRegistry;
-use crate::utils::path::validate_path;
+use crate::utils::path_security::validate_path;
 use crate::utils::shell::{default_shell, shell_command_flag};
 
 pub async fn register_bash_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {

@@ -5,7 +5,7 @@ pub mod message_service;
 pub mod rpc_gateway;
 pub mod session_cache;
 pub mod sse_manager;
-pub mod todos;
+pub mod todo_extraction;
 pub mod visibility_tracker;
 
 use std::sync::Arc;

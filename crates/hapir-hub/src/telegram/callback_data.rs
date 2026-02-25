@@ -1,6 +1,6 @@
 use hapir_shared::schemas::Session;
 
-use crate::notifications::session_info::get_session_name as shared_get_session_name;
+use crate::notifications::session_naming::get_session_name as shared_get_session_name;
 
 const MAX_CALLBACK_DATA: usize = 64;
 

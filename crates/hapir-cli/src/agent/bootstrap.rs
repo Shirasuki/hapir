@@ -6,7 +6,7 @@ use hapir_shared::modes::{AgentFlavor, ModelMode, PermissionMode, SessionMode};
 use hapir_shared::schemas::SessionStartedBy;
 
 use crate::agent::session_lifecycle::{AgentSessionLifecycle, AgentSessionLifecycleOptions};
-use crate::agent::session_factory::{bootstrap_session, SessionBootstrapOptions};
+use crate::agent::session_init::{bootstrap_session, SessionBootstrapOptions};
 use hapir_infra::api::ApiClient;
 use hapir_infra::config::CliConfiguration;
 use hapir_infra::ws::session_client::WsSessionClient;

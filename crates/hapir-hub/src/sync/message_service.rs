@@ -2,7 +2,7 @@ use hapir_shared::schemas::{AttachmentMetadata, DecryptedMessage, SyncEvent};
 use serde_json::Value;
 
 use super::event_publisher::EventPublisher;
-use super::todos::extract_todos_from_message_content;
+use super::todo_extraction::extract_todos_from_message_content;
 use crate::store::Store;
 use crate::store::types::StoredMessage;
 

@@ -8,7 +8,7 @@ use hapir_shared::rpc::bash::RpcCommandResponse;
 use hapir_shared::rpc::ripgrep::RpcRipgrepRequest;
 
 use crate::rpc::RpcRegistry;
-use crate::utils::path::validate_path;
+use crate::utils::path_security::validate_path;
 
 pub async fn register_ripgrep_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = Arc::new(working_directory.to_string());

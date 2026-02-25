@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::api::{InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo};
 use super::callbacks::{APPROVE_ACTION, DENY_ACTION};
-use super::renderer::{build_mini_app_deep_link, create_callback_data, get_session_name, truncate};
+use super::callback_data::{build_mini_app_deep_link, create_callback_data, get_session_name, truncate};
 
 const MAX_TOOL_ARGS_LENGTH: usize = 150;
 

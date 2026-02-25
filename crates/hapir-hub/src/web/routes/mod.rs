@@ -1,8 +1,8 @@
 pub mod auth;
-pub mod bind;
+pub mod telegram_bind;
 pub mod cli;
 pub mod events;
-pub mod git;
+pub mod session_workspace;
 pub mod machines;
 pub mod messages;
 pub mod permissions;
@@ -17,13 +17,13 @@ use axum::Router;
 pub fn api_router() -> Router<AppState> {
     Router::new()
         .merge(auth::router())
-        .merge(bind::router())
+        .merge(telegram_bind::router())
         .merge(sessions::router())
         .merge(messages::router())
         .merge(permissions::router())
         .merge(machines::router())
         .merge(events::router())
-        .merge(git::router())
+        .merge(session_workspace::router())
         .merge(push::router())
         .merge(voice::router())
 }

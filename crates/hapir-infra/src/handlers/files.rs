@@ -13,7 +13,7 @@ use hapir_shared::rpc::files::{
 };
 
 use crate::rpc::RpcRegistry;
-use crate::utils::path::validate_path;
+use crate::utils::path_security::validate_path;
 
 pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_directory: &str) {
     let wd = Arc::new(working_directory.to_string());

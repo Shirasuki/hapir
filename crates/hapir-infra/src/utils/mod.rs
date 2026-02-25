@@ -1,6 +1,6 @@
 pub mod machine;
 pub mod message_queue;
-pub mod path;
+pub mod path_security;
 pub mod plugin;
 pub mod process;
 pub mod shell;

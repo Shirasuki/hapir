@@ -8,15 +8,15 @@ use tracing::{error, info, warn};
 use hapir_shared::schemas::Session;
 
 use crate::notifications::push_channel::NotificationChannel;
-use crate::notifications::session_info::get_agent_name;
+use crate::notifications::session_naming::get_agent_name;
 use crate::store::Store;
 use crate::store::users;
 use crate::sync::SyncEngine;
 
 use super::api::{InlineKeyboardButton, InlineKeyboardMarkup, TelegramApi, WebAppInfo};
 use super::callbacks::handle_callback;
-use super::renderer::build_mini_app_deep_link;
-use super::session_view::{create_notification_keyboard, format_session_notification};
+use super::callback_data::build_mini_app_deep_link;
+use super::notification_formatter::{create_notification_keyboard, format_session_notification};
 
 pub struct HappyBot {
     api: Arc<TelegramApi>,

@@ -12,7 +12,7 @@ use hapir_shared::rpc::git::{
 };
 
 use crate::rpc::RpcRegistry;
-use crate::utils::path::validate_path;
+use crate::utils::path_security::validate_path;
 
 async fn run_git_command(args: &[&str], cwd: &str, timeout_ms: u64) -> Value {
     let result = timeout(

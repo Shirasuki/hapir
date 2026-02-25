@@ -89,7 +89,7 @@ pub async fn run_claude(
     )
     .await?;
 
-    let ws_client = boot.ws_client.clone();
+    let session_client = boot.ws_client.clone();
     let session_id = boot.session_id.clone();
 
     let initial_mode = ClaudeEnhancedMode {
@@ -109,7 +109,7 @@ pub async fn run_claude(
             base_on_mode_change(mode);
         });
     let session_base = AgentSessionBase::new(AgentSessionBaseOptions {
-        ws_client: ws_client.clone(),
+        ws_client: session_client.clone(),
         path: working_directory.clone(),
         session_id: None,
         queue: queue.clone(),
@@ -145,7 +145,7 @@ pub async fn run_claude(
                 sb.on_thinking_change(thinking).await;
             });
         })),
-        Some(ws_client.clone()),
+        Some(session_client.clone()),
         hook_session_mode.clone(),
     )
     .await?;
@@ -202,7 +202,7 @@ pub async fn run_claude(
         }
     }));
 
-    let rpc = CommonRpc::new(&ws_client, queue.clone(), "runClaude");
+    let rpc = CommonRpc::new(&session_client, queue.clone(), "runClaude");
     rpc.on_user_message(
         current_mode.clone(),
         Some(session_base.switch_notify.clone()),
@@ -231,7 +231,7 @@ pub async fn run_claude(
 
     // Permission responses are delivered via oneshot channels from pending_permissions
     let cs_for_permission = claude_session.clone();
-    ws_client
+    session_client
         .register_rpc("permission", move |params| {
             let cs = cs_for_permission.clone();
             Box::pin(async move {
@@ -294,7 +294,7 @@ pub async fn run_claude(
 
     // Abort kills the active Claude process by PID rather than using an ACP cancel
     let cs_for_abort = claude_session.clone();
-    ws_client
+    session_client
         .register_rpc("abort", move |_params| {
             let cs = cs_for_abort.clone();
             Box::pin(async move {
@@ -320,9 +320,9 @@ pub async fn run_claude(
         })
         .await;
 
-    let terminal_mgr = terminal::setup_terminal(&ws_client, &session_id, &working_directory).await;
+    let terminal_mgr = terminal::setup_terminal(&session_client, &session_id, &working_directory).await;
 
-    let _ = ws_client.connect(Duration::from_secs(10)).await;
+    let _ = session_client.connect(Duration::from_secs(10)).await;
 
     let cs_for_local = claude_session.clone();
     let cs_for_remote = claude_session.clone();
@@ -352,7 +352,7 @@ pub async fn run_claude(
             "[runClaude] Local launch failed: {} ({})",
             failure.message, failure.exit_reason
         );
-        ws_client
+        session_client
             .send_message(serde_json::json!({
                 "type": "error",
                 "message": failure.message,
