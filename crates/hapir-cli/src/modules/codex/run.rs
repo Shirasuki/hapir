@@ -3,13 +3,13 @@ use std::time::Duration;
 
 use tokio::select;
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
 use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
+use hapir_shared::session::{AgentContent, FlatMessage, RoleWrappedMessage};
 
 use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
-use crate::agent::cleanup::cleanup_agent_session;
 use crate::agent::common_rpc::{
     ApplyConfigFn, CommonRpc, CommonRpcConfig, MessagePreProcessor, OnKillFn,
     register_acp_abort_handler, register_switch_handler,
@@ -34,17 +34,18 @@ use super::session_scanner::CodexSessionScanner;
 use super::{CodexMode, compute_mode_hash};
 use crate::terminal::{TerminalManager, TerminalManagerOptions};
 
-pub(crate) fn codex_message(data: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({
-        "role": "assistant",
-        "content": { "type": "codex", "data": data }
-    })
+fn codex_role_wrapped(data: serde_json::Value) -> RoleWrappedMessage {
+    RoleWrappedMessage {
+        role: "assistant".into(),
+        content: AgentContent::Codex { data },
+        meta: None,
+    }
 }
 
 async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
     match msg {
         AgentMessage::Text { text } => {
-            ws.send_message(codex_message(serde_json::json!({
+            ws.send_typed_message(&codex_role_wrapped(serde_json::json!({
                 "type": "message",
                 "message": text,
             })))
@@ -63,7 +64,7 @@ async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
             input,
             status,
         } => {
-            ws.send_message(codex_message(serde_json::json!({
+            ws.send_typed_message(&codex_role_wrapped(serde_json::json!({
                 "type": "tool-call",
                 "callId": id,
                 "name": name,
@@ -73,7 +74,7 @@ async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
             .await;
         }
         AgentMessage::ToolResult { id, output, status } => {
-            ws.send_message(codex_message(serde_json::json!({
+            ws.send_typed_message(&codex_role_wrapped(serde_json::json!({
                 "type": "tool-call-result",
                 "callId": id,
                 "output": output,
@@ -82,14 +83,14 @@ async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
             .await;
         }
         AgentMessage::Plan { items } => {
-            ws.send_message(codex_message(serde_json::json!({
+            ws.send_typed_message(&codex_role_wrapped(serde_json::json!({
                 "type": "plan",
                 "entries": items,
             })))
             .await;
         }
         AgentMessage::Error { message } => {
-            ws.send_message(codex_message(serde_json::json!({
+            ws.send_typed_message(&codex_role_wrapped(serde_json::json!({
                 "type": "message",
                 "message": message,
             })))
@@ -115,7 +116,6 @@ pub async fn run_codex(
 ) -> anyhow::Result<()> {
     let working_directory = options.working_directory;
 
-    save_terminal_state();
     let started_by = options.started_by;
     let starting_mode = options.starting_mode.unwrap_or(match started_by {
         SharedStartedBy::Terminal => SessionMode::Local,
@@ -409,7 +409,15 @@ pub async fn run_codex(
     .await;
 
     let _ = backend.disconnect().await;
-    cleanup_agent_session(loop_result, terminal_mgr, boot.lifecycle, true, "runCodex").await;
+    terminal_mgr.close_all().await;
+    boot.lifecycle.cleanup().await;
+
+    restore_terminal_state();
+
+    if let Err(e) = loop_result {
+        error!("[runCodex] Loop error: {e}");
+        boot.lifecycle.mark_crash(&e.to_string()).await;
+    }
 
     Ok(())
 }
@@ -451,10 +459,10 @@ async fn codex_local_launcher(session: &Arc<AgentSessionBase<CodexMode>>) -> Loo
             warn!("[codexLocalLauncher] Failed to spawn codex: {}", e);
             session
                 .ws_client
-                .send_message(serde_json::json!({
-                    "type": "error",
-                    "message": format!("Failed to launch codex CLI: {}", e),
-                }))
+                .send_typed_message(&FlatMessage::Error {
+                    message: format!("Failed to launch codex CLI: {}", e),
+                    exit_reason: None,
+                })
                 .await;
             sync_driver.stop();
             return LoopResult::Exit;
@@ -514,10 +522,10 @@ async fn codex_remote_launcher(
         );
         session
             .ws_client
-            .send_message(serde_json::json!({
-                "type": "error",
-                "message": format!("Failed to initialize codex app-server: {}", e),
-            }))
+            .send_typed_message(&FlatMessage::Error {
+                message: format!("Failed to initialize codex app-server: {}", e),
+                exit_reason: None,
+            })
             .await;
         return LoopResult::Exit;
     }
@@ -563,10 +571,10 @@ async fn codex_remote_launcher(
                             warn!("[codexRemoteLauncher] Failed to start thread: {}", e2);
                             session
                                 .ws_client
-                                .send_message(serde_json::json!({
-                                    "type": "error",
-                                    "message": format!("Failed to start codex thread: {}", e2),
-                                }))
+                                .send_typed_message(&FlatMessage::Error {
+                                    message: format!("Failed to start codex thread: {}", e2),
+                                    exit_reason: None,
+                                })
                                 .await;
                             return LoopResult::Exit;
                         }
@@ -590,10 +598,10 @@ async fn codex_remote_launcher(
                     warn!("[codexRemoteLauncher] Failed to start thread: {}", e);
                     session
                         .ws_client
-                        .send_message(serde_json::json!({
-                            "type": "error",
-                            "message": format!("Failed to start codex thread: {}", e),
-                        }))
+                        .send_typed_message(&FlatMessage::Error {
+                            message: format!("Failed to start codex thread: {}", e),
+                            exit_reason: None,
+                        })
                         .await;
                     return LoopResult::Exit;
                 }
@@ -656,10 +664,10 @@ async fn codex_remote_launcher(
             warn!("[codexRemoteLauncher] Prompt error: {}", e);
             session
                 .ws_client
-                .send_message(serde_json::json!({
-                    "type": "error",
-                    "message": format!("Codex error: {}", e),
-                }))
+                .send_typed_message(&FlatMessage::Error {
+                    message: format!("Codex error: {}", e),
+                    exit_reason: None,
+                })
                 .await;
         }
 

@@ -1,9 +1,6 @@
 use super::session_base::AgentSessionBase;
 use hapir_shared::modes::SessionMode;
-use hapir_infra::utils::terminal::{
-    clear_reclaim_prompt, prepare_for_local_agent, restore_after_local_agent,
-    set_logging_suppressed, show_reclaim_prompt, show_reclaiming_prompt,
-};
+use hapir_infra::utils::terminal::{clear_reclaim_prompt, prepare_for_local_agent, restore_after_local_agent, restore_terminal_state, save_terminal_state, set_logging_suppressed, show_reclaim_prompt, show_reclaiming_prompt};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -65,6 +62,7 @@ async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
 
         match mode {
             SessionMode::Local => {
+                save_terminal_state();
                 prepare_for_local_agent();
                 let reason = (opts.run_local)(&session).await;
                 restore_after_local_agent();
@@ -73,6 +71,7 @@ async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
                 }
                 mode = SessionMode::Remote;
                 session.on_mode_change(mode).await;
+                restore_terminal_state();
             }
             SessionMode::Remote => {
                 // When running from a terminal, show a reclaim prompt and
@@ -109,8 +108,6 @@ async fn run_local_remote_loop<Mode: Clone + Send + 'static>(
 
 /// Display a reclaim prompt and wait for the user to press Space.
 async fn wait_for_reclaim_keypress(notify: &Notify) {
-    use tokio::io::AsyncReadExt;
-
     show_reclaim_prompt();
 
     // Switch stdin to raw mode to capture individual keypresses

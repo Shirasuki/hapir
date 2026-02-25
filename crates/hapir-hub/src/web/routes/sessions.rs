@@ -12,7 +12,7 @@ use hapir_shared::modes::{
     AgentFlavor, ModelMode, PermissionMode, is_model_mode_allowed_for_flavor,
     is_permission_mode_allowed_for_flavor, permission_modes_for_flavor,
 };
-use hapir_shared::session_summary::to_session_summary;
+use hapir_shared::session::to_session_summary;
 
 use crate::sync::{ResumeSessionErrorCode, ResumeSessionResult};
 use crate::web::AppState;

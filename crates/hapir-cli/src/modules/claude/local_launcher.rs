@@ -3,6 +3,7 @@ use crate::agent::local_launch_policy::{
 };
 use crate::agent::loop_base::LoopResult;
 use crate::modules::claude::session::ClaudeSession;
+use hapir_shared::session::FlatMessage;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::process::Command;
@@ -64,10 +65,10 @@ pub async fn claude_local_launcher(session: &Arc<ClaudeSession<ClaudeEnhancedMod
             session
                 .base
                 .ws_client
-                .send_message(serde_json::json!({
-                    "type": "error",
-                    "message": format!("Failed to launch claude CLI: {}", e),
-                }))
+                .send_typed_message(&FlatMessage::Error {
+                    message: format!("Failed to launch claude CLI: {}", e),
+                    exit_reason: None,
+                })
                 .await;
             return LoopResult::Exit;
         }

@@ -12,6 +12,9 @@ use tracing::debug;
 
 use hapir_infra::ws::session_client::WsSessionClient;
 use hapir_shared::modes::SessionMode;
+use hapir_shared::session::{
+    AgentContent, ClaudeMessageBody, ClaudeOutputData, MessageMeta, RoleWrappedMessage,
+};
 
 /// Data received from Claude's SessionStart hook.
 pub type SessionHookData = HashMap<String, serde_json::Value>;
@@ -175,11 +178,15 @@ async fn handle_event(
                 if let Some(ref ws) = state.ws_client {
                     let prompt = data.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
                     if !prompt.is_empty() {
-                        ws.send_message(serde_json::json!({
-                            "role": "user",
-                            "content": { "type": "text", "text": prompt },
-                            "meta": { "sentFrom": "cli" }
-                        }))
+                        ws.send_typed_message(&RoleWrappedMessage {
+                            role: "user".into(),
+                            content: AgentContent::Text {
+                                text: prompt.to_string(),
+                            },
+                            meta: Some(MessageMeta {
+                                sent_from: "cli".into(),
+                            }),
+                        })
                         .await;
                     }
                 }
@@ -198,22 +205,24 @@ async fn handle_event(
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     if !text.is_empty() {
-                        ws.send_message(serde_json::json!({
-                            "role": "assistant",
-                            "content": {
-                                "type": "output",
-                                "data": {
-                                    "type": "assistant",
-                                    "message": {
-                                        "role": "assistant",
-                                        "content": [
+                        ws.send_typed_message(&RoleWrappedMessage {
+                            role: "assistant".into(),
+                            content: AgentContent::Output {
+                                data: ClaudeOutputData::Assistant {
+                                    message: ClaudeMessageBody {
+                                        role: "assistant".into(),
+                                        content: serde_json::json!([
                                             { "type": "text", "text": text }
-                                        ]
-                                    }
-                                }
+                                        ]),
+                                        usage: None,
+                                    },
+                                    parent_uuid: None,
+                                },
                             },
-                            "meta": { "sentFrom": "cli" }
-                        }))
+                            meta: Some(MessageMeta {
+                                sent_from: "cli".into(),
+                            }),
+                        })
                         .await;
                     }
                 }

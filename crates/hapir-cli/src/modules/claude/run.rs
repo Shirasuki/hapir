@@ -5,17 +5,14 @@ use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use hapir_shared::schemas::SessionStartedBy;
 
 use super::local_launcher::claude_local_launcher;
 use super::remote_launcher::claude_remote_launcher;
 use crate::agent::bootstrap::{bootstrap_agent, AgentBootstrapConfig};
-use crate::agent::cleanup::cleanup_agent_session;
-use crate::agent::common_rpc::{
-    ApplyConfigFn, CommonRpc, CommonRpcConfig, MessagePreProcessor,
-};
+use crate::agent::common_rpc::{ApplyConfigFn, CommonRpc, CommonRpcConfig, MessagePreProcessor};
 use crate::agent::loop_base::{run_local_remote_session, LoopOptions};
 use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions};
 use crate::modules::claude::hook_server::start_hook_server;
@@ -26,8 +23,9 @@ use hapir_infra::config::CliConfiguration;
 use hapir_infra::handlers::uploads;
 use hapir_infra::rpc::{EventRegistry, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
-use hapir_infra::utils::terminal::save_terminal_state;
+use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
 use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
+use hapir_shared::session::FlatMessage;
 
 /// Options for starting a Claude session.
 #[derive(Debug, Clone)]
@@ -66,8 +64,6 @@ pub async fn run_claude(
     config: &CliConfiguration,
 ) -> anyhow::Result<()> {
     let working_directory = options.working_directory.clone();
-
-    save_terminal_state();
 
     let started_by = options.started_by;
     let starting_mode = options.starting_mode.unwrap_or(match started_by {
@@ -230,13 +226,17 @@ pub async fn run_claude(
         pre_process: Some(pre_process),
     });
     session_client.register_rpc_group(&rpc).await;
-    session_client.register_rpc_group(claude_session.as_ref()).await;
+    session_client
+        .register_rpc_group(claude_session.as_ref())
+        .await;
 
     let terminal_mgr = Arc::new(TerminalManager::new(TerminalManagerOptions {
         session_id: session_id.clone(),
         session_path: Some(working_directory.clone()),
     }));
-    session_client.register_event_group(terminal_mgr.as_ref()).await;
+    session_client
+        .register_event_group(terminal_mgr.as_ref())
+        .await;
 
     let _ = session_client.connect(Duration::from_secs(10)).await;
 
@@ -269,11 +269,10 @@ pub async fn run_claude(
             failure.message, failure.exit_reason
         );
         session_client
-            .send_message(serde_json::json!({
-                "type": "error",
-                "message": failure.message,
-                "exitReason": failure.exit_reason,
-            }))
+            .send_typed_message(&FlatMessage::Error {
+                message: failure.message,
+                exit_reason: Some(failure.exit_reason),
+            })
             .await;
     }
 
@@ -283,8 +282,15 @@ pub async fn run_claude(
     }
 
     uploads::cleanup_upload_dir(&session_id).await;
+    terminal_mgr.close_all().await;
+    boot.lifecycle.cleanup().await;
 
-    cleanup_agent_session(loop_result, terminal_mgr, boot.lifecycle, true, "runClaude").await;
+    restore_terminal_state();
+
+    if let Err(e) = loop_result {
+        error!("[runClaude] Loop error: {e}");
+        boot.lifecycle.mark_crash(&e.to_string()).await;
+    }
 
     Ok(())
 }

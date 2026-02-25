@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -256,6 +257,11 @@ impl WsSessionClient {
         };
         self.ws
             .emit("message", serde_json::to_value(&req).unwrap_or_default())
+            .await;
+    }
+
+    pub async fn send_typed_message(&self, msg: &impl Serialize) {
+        self.send_message(serde_json::to_value(msg).unwrap_or_default())
             .await;
     }
 

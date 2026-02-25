@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::agent::local_sync::LocalSessionScanner;
 
-use super::run::codex_message;
+use hapir_shared::session::{AgentContent, RoleWrappedMessage};
 
 pub type SessionFoundCallback = Box<dyn Fn(&str) + Send + Sync>;
 
@@ -237,6 +237,15 @@ impl LocalSessionScanner for CodexSessionScanner {
 }
 // PLACEHOLDER_HELPERS
 
+fn codex_message_value(data: Value) -> Value {
+    serde_json::to_value(&RoleWrappedMessage {
+        role: "assistant".into(),
+        content: AgentContent::Codex { data },
+        meta: None,
+    })
+    .unwrap_or_default()
+}
+
 fn convert_event(line: &Value) -> Option<Value> {
     let event_type = line.get("type").and_then(|v| v.as_str())?;
     let payload = line.get("payload")?;
@@ -254,7 +263,7 @@ fn convert_event(line: &Value) -> Option<Value> {
                 }
                 "agent_message" => {
                     let message = payload.get("message").and_then(|v| v.as_str())?;
-                    Some(codex_message(serde_json::json!({
+                    Some(codex_message_value(serde_json::json!({
                         "type": "message",
                         "message": message,
                     })))
@@ -264,7 +273,7 @@ fn convert_event(line: &Value) -> Option<Value> {
                         .get("text")
                         .or_else(|| payload.get("message"))
                         .and_then(|v| v.as_str())?;
-                    Some(codex_message(serde_json::json!({
+                    Some(codex_message_value(serde_json::json!({
                         "type": "reasoning",
                         "message": text,
                     })))
@@ -283,7 +292,7 @@ fn convert_event(line: &Value) -> Option<Value> {
                         .and_then(|v| v.as_str())
                         .and_then(|s| serde_json::from_str::<Value>(s).ok())
                         .unwrap_or(Value::Null);
-                    Some(codex_message(serde_json::json!({
+                    Some(codex_message_value(serde_json::json!({
                         "type": "tool-call",
                         "callId": call_id,
                         "name": name,
@@ -293,7 +302,7 @@ fn convert_event(line: &Value) -> Option<Value> {
                 "function_call_output" => {
                     let call_id = payload.get("call_id").and_then(|v| v.as_str())?;
                     let output = payload.get("output").cloned().unwrap_or(Value::Null);
-                    Some(codex_message(serde_json::json!({
+                    Some(codex_message_value(serde_json::json!({
                         "type": "tool-call-result",
                         "callId": call_id,
                         "output": output,

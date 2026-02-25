@@ -7,6 +7,10 @@ use tokio::select;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+use hapir_shared::session::{
+    AgentContent, ClaudeMessageBody, ClaudeOutputData, RoleWrappedMessage,
+};
+
 use crate::agent::loop_base::LoopResult;
 use crate::modules::claude::permission_handler::PermissionHandler;
 use crate::modules::claude::sdk::query;
@@ -205,22 +209,23 @@ pub async fn claude_remote_launcher(
                     session
                         .base
                         .ws_client
-                        .send_message(serde_json::json!({
-                            "role": "assistant",
-                            "content": {
-                                "type": "output",
-                                "data": {
-                                    "type": "assistant",
-                                    "message": {
-                                        "role": "assistant",
-                                        "content": [{
+                        .send_typed_message(&RoleWrappedMessage {
+                            role: "assistant".into(),
+                            content: AgentContent::Output {
+                                data: ClaudeOutputData::Assistant {
+                                    message: ClaudeMessageBody {
+                                        role: "assistant".into(),
+                                        content: serde_json::json!([{
                                             "type": "text",
                                             "text": format!("Failed to spawn claude SDK: {}", e),
-                                        }]
-                                    }
-                                }
-                            }
-                        }))
+                                        }]),
+                                        usage: None,
+                                    },
+                                    parent_uuid: None,
+                                },
+                            },
+                            meta: None,
+                        })
                         .await;
                     continue;
                 }
@@ -370,20 +375,21 @@ pub async fn claude_remote_launcher(
                         session
                             .base
                             .ws_client
-                            .send_message(serde_json::json!({
-                                "role": message.role,
-                                "content": {
-                                    "type": "output",
-                                    "data": {
-                                        "type": "assistant",
-                                        "parentUuid": parent_tool_use_id,
-                                        "message": {
-                                            "role": message.role,
-                                            "content": message.content,
-                                        }
-                                    }
-                                }
-                            }))
+                            .send_typed_message(&RoleWrappedMessage {
+                                role: message.role.clone(),
+                                content: AgentContent::Output {
+                                    data: ClaudeOutputData::Assistant {
+                                        message: ClaudeMessageBody {
+                                            role: message.role.clone(),
+                                            content: serde_json::to_value(&message.content)
+                                                .unwrap_or_default(),
+                                            usage: None,
+                                        },
+                                        parent_uuid: parent_tool_use_id.clone(),
+                                    },
+                                },
+                                meta: None,
+                            })
                             .await;
                     }
                 }
@@ -402,20 +408,21 @@ pub async fn claude_remote_launcher(
                     session
                         .base
                         .ws_client
-                        .send_message(serde_json::json!({
-                            "role": "assistant",
-                            "content": {
-                                "type": "output",
-                                "data": {
-                                    "type": "user",
-                                    "parentUuid": parent_tool_use_id,
-                                    "message": {
-                                        "role": message.role,
-                                        "content": message.content,
-                                    }
-                                }
-                            }
-                        }))
+                        .send_typed_message(&RoleWrappedMessage {
+                            role: "assistant".into(),
+                            content: AgentContent::Output {
+                                data: ClaudeOutputData::User {
+                                    message: ClaudeMessageBody {
+                                        role: message.role.clone(),
+                                        content: serde_json::to_value(&message.content)
+                                            .unwrap_or_default(),
+                                        usage: None,
+                                    },
+                                    parent_uuid: parent_tool_use_id.clone(),
+                                },
+                            },
+                            meta: None,
+                        })
                         .await;
                 }
                 SdkMessage::Result {
@@ -457,27 +464,24 @@ pub async fn claude_remote_launcher(
                             .any(|b| b.get("type").and_then(|v| v.as_str()) != Some("thinking"));
 
                         if has_content || !is_error {
-                            let mut msg_body = serde_json::json!({
-                                "role": "assistant",
-                                "content": content,
-                            });
-                            if let Some(usage) = &final_usage {
-                                msg_body["usage"] = usage.clone();
-                            }
-
                             session
                                 .base
                                 .ws_client
-                                .send_message(serde_json::json!({
-                                    "role": "assistant",
-                                    "content": {
-                                        "type": "output",
-                                        "data": {
-                                            "type": "assistant",
-                                            "message": msg_body
-                                        }
-                                    }
-                                }))
+                                .send_typed_message(&RoleWrappedMessage {
+                                    role: "assistant".into(),
+                                    content: AgentContent::Output {
+                                        data: ClaudeOutputData::Assistant {
+                                            message: ClaudeMessageBody {
+                                                role: "assistant".into(),
+                                                content: serde_json::to_value(&content)
+                                                    .unwrap_or_default(),
+                                                usage: final_usage.clone(),
+                                            },
+                                            parent_uuid: None,
+                                        },
+                                    },
+                                    meta: None,
+                                })
                                 .await;
                         }
                     }
@@ -486,22 +490,23 @@ pub async fn claude_remote_launcher(
                         session
                             .base
                             .ws_client
-                            .send_message(serde_json::json!({
-                                "role": "assistant",
-                                "content": {
-                                    "type": "output",
-                                    "data": {
-                                        "type": "assistant",
-                                        "message": {
-                                            "role": "assistant",
-                                            "content": [{
+                            .send_typed_message(&RoleWrappedMessage {
+                                role: "assistant".into(),
+                                content: AgentContent::Output {
+                                    data: ClaudeOutputData::Assistant {
+                                        message: ClaudeMessageBody {
+                                            role: "assistant".into(),
+                                            content: serde_json::json!([{
                                                 "type": "text",
                                                 "text": error_text,
-                                            }]
-                                        }
-                                    }
-                                }
-                            }))
+                                            }]),
+                                            usage: None,
+                                        },
+                                        parent_uuid: None,
+                                    },
+                                },
+                                meta: None,
+                            })
                             .await;
                     }
 

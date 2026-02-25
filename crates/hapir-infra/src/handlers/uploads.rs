@@ -1,3 +1,4 @@
+use std::env::temp_dir;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +16,7 @@ use crate::rpc::RpcRegistry;
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 
 fn upload_dir(session_id: &str) -> PathBuf {
-    std::env::temp_dir().join("hapir-blobs").join(session_id)
+    temp_dir().join("hapir-blobs").join(session_id)
 }
 
 pub async fn cleanup_upload_dir(session_id: &str) {

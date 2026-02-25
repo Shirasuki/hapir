@@ -6,7 +6,7 @@ use ts_rs::{Config, TS};
 
 use hapir_shared::modes::*;
 use hapir_shared::schemas::*;
-use hapir_shared::session_summary::*;
+use hapir_shared::session::*;
 
 fn watch_recursive(dir: &Path) {
     for entry in fs::read_dir(dir).into_iter().flatten().flatten() {

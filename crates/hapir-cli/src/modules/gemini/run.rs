@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
 use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
+use hapir_shared::session::FlatMessage;
 
+use crate::agent::agent_message_convert::agent_message_to_flat;
 use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
-use crate::agent::cleanup::cleanup_agent_session;
 use crate::agent::common_rpc::{
     ApplyConfigFn, CommonRpc, CommonRpcConfig, OnKillFn, register_acp_abort_handler,
 };
@@ -21,61 +22,24 @@ use hapir_acp::types::{AgentBackend, AgentMessage, AgentSessionConfig, PromptCon
 use hapir_infra::config::CliConfiguration;
 use hapir_infra::rpc::{EventRegistry, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
+use hapir_infra::utils::terminal::restore_terminal_state;
 use hapir_infra::ws::session_client::WsSessionClient;
 
 use super::{GeminiMode, compute_mode_hash};
 use crate::terminal::{TerminalManager, TerminalManagerOptions};
 
 async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
-    match msg {
-        AgentMessage::Text { text } => {
-            ws.send_message(serde_json::json!({
-                "type": "assistant",
-                "message": { "role": "assistant", "content": text },
-            }))
-            .await;
-        }
-        AgentMessage::TextDelta {
-            message_id,
-            text,
-            is_final,
-        } => {
-            ws.send_message_delta(&message_id, &text, is_final).await;
-        }
-        AgentMessage::ToolCall {
-            id,
-            name,
-            input,
-            status,
-        } => {
-            ws.send_message(serde_json::json!({
-                "type": "tool_call",
-                "toolCall": { "id": id, "name": name, "input": input, "status": status },
-            }))
-            .await;
-        }
-        AgentMessage::ToolResult { id, output, status } => {
-            ws.send_message(serde_json::json!({
-                "type": "tool_result",
-                "toolResult": { "id": id, "output": output, "status": status },
-            }))
-            .await;
-        }
-        AgentMessage::Plan { items } => {
-            ws.send_message(serde_json::json!({
-                "type": "plan",
-                "entries": items,
-            }))
-            .await;
-        }
-        AgentMessage::Error { message } => {
-            ws.send_message(serde_json::json!({
-                "type": "assistant",
-                "message": { "role": "assistant", "content": message },
-            }))
-            .await;
-        }
-        AgentMessage::TurnComplete { .. } | AgentMessage::ThinkingStatus { .. } => {}
+    if let AgentMessage::TextDelta {
+        message_id,
+        text,
+        is_final,
+    } = &msg
+    {
+        ws.send_message_delta(message_id, text, *is_final).await;
+        return;
+    }
+    if let Some(flat) = agent_message_to_flat(&msg) {
+        ws.send_typed_message(&flat).await;
     }
 }
 
@@ -217,14 +181,15 @@ pub async fn run_gemini(
     .await;
 
     let _ = backend.disconnect().await;
-    cleanup_agent_session(
-        loop_result,
-        terminal_mgr,
-        boot.lifecycle,
-        false,
-        "runGemini",
-    )
-    .await;
+    terminal_mgr.close_all().await;
+    boot.lifecycle.cleanup().await;
+
+    restore_terminal_state();
+
+    if let Err(e) = loop_result {
+        error!("[runGemini] Loop error: {e}");
+        boot.lifecycle.mark_crash(&e.to_string()).await;
+    }
 
     Ok(())
 }
@@ -244,10 +209,10 @@ async fn gemini_local_launcher(session: &Arc<AgentSessionBase<GeminiMode>>) -> L
             warn!("[geminiLocalLauncher] Failed to spawn gemini: {}", e);
             session
                 .ws_client
-                .send_message(serde_json::json!({
-                    "type": "error",
-                    "message": format!("Failed to launch gemini CLI: {}", e),
-                }))
+                .send_typed_message(&FlatMessage::Error {
+                    message: format!("Failed to launch gemini CLI: {}", e),
+                    exit_reason: None,
+                })
                 .await;
         }
     }
@@ -279,10 +244,10 @@ async fn gemini_remote_launcher(
         );
         session
             .ws_client
-            .send_message(serde_json::json!({
-                "type": "error",
-                "message": format!("Failed to initialize gemini ACP: {}", e),
-            }))
+            .send_typed_message(&FlatMessage::Error {
+                message: format!("Failed to initialize gemini ACP: {}", e),
+                exit_reason: None,
+            })
             .await;
         return LoopResult::Exit;
     }
@@ -302,10 +267,10 @@ async fn gemini_remote_launcher(
             warn!("[geminiRemoteLauncher] Failed to create ACP session: {}", e);
             session
                 .ws_client
-                .send_message(serde_json::json!({
-                    "type": "error",
-                    "message": format!("Failed to create gemini ACP session: {}", e),
-                }))
+                .send_typed_message(&FlatMessage::Error {
+                    message: format!("Failed to create gemini ACP session: {}", e),
+                    exit_reason: None,
+                })
                 .await;
             return LoopResult::Exit;
         }
@@ -345,10 +310,10 @@ async fn gemini_remote_launcher(
             warn!("[geminiRemoteLauncher] Prompt error: {}", e);
             session
                 .ws_client
-                .send_message(serde_json::json!({
-                    "type": "error",
-                    "message": format!("Gemini ACP error: {}", e),
-                }))
+                .send_typed_message(&FlatMessage::Error {
+                    message: format!("Gemini ACP error: {}", e),
+                    exit_reason: None,
+                })
                 .await;
         }
 
