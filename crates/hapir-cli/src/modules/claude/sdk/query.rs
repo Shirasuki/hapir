@@ -5,6 +5,7 @@ use hapir_infra::utils::process::kill_process_tree;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, mpsc};
+use tokio::task::JoinHandle;
 use tracing::debug;
 
 /// A running Claude query that yields SDK messages (--print mode).
@@ -13,7 +14,7 @@ pub struct Query {
     #[allow(dead_code)]
     child: Child,
     #[allow(dead_code)]
-    reader_handle: tokio::task::JoinHandle<()>,
+    reader_handle: JoinHandle<()>,
 }
 
 impl Query {
@@ -32,7 +33,7 @@ pub struct InteractiveQuery {
     #[allow(dead_code)]
     child: Child,
     #[allow(dead_code)]
-    reader_handle: tokio::task::JoinHandle<()>,
+    reader_handle: JoinHandle<()>,
 }
 
 impl InteractiveQuery {
@@ -117,6 +118,7 @@ fn build_common_args(options: &QueryOptions) -> Vec<String> {
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
+        "--include-partial-messages".to_string(),
     ];
     if let Some(ref sp) = options.custom_system_prompt {
         args.push("--system-prompt".to_string());
@@ -180,7 +182,7 @@ fn spawn_stdout_reader(
     stdout: tokio::process::ChildStdout,
 ) -> (
     mpsc::UnboundedReceiver<SdkMessage>,
-    tokio::task::JoinHandle<()>,
+    JoinHandle<()>,
 ) {
     let (tx, rx) = mpsc::unbounded_channel();
     let handle = tokio::spawn(async move {

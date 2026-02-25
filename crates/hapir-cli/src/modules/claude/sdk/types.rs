@@ -57,6 +57,16 @@ pub enum SdkMessage {
     ControlCancelRequest { request_id: String },
     #[serde(rename = "log")]
     Log { log: SdkLogBody },
+    #[serde(rename = "stream_event")]
+    StreamEvent {
+        event: StreamEventBody,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_tool_use_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        uuid: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +114,33 @@ pub struct ControlRequestBody {
 pub struct SdkLogBody {
     pub level: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum StreamEventBody {
+    #[serde(rename = "content_block_delta")]
+    ContentBlockDelta {
+        index: u32,
+        delta: StreamDelta,
+    },
+    #[serde(rename = "content_block_stop")]
+    ContentBlockStop { index: u32 },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum StreamDelta {
+    #[serde(rename = "text_delta")]
+    TextDelta { text: String },
+    #[serde(rename = "thinking_delta")]
+    ThinkingDelta { thinking: String },
+    #[serde(rename = "input_json_delta")]
+    InputJsonDelta { partial_json: String },
+    #[serde(other)]
+    Unknown,
 }
 
 /// Permission result for tool calls.

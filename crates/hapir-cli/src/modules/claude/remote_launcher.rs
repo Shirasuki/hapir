@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 use tokio::select;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, info, warn};
 
 use hapir_shared::session::{
@@ -14,13 +14,15 @@ use hapir_shared::session::{
 use crate::agent::loop_base::LoopResult;
 use crate::modules::claude::permission_handler::PermissionHandler;
 use crate::modules::claude::sdk::query;
-use crate::modules::claude::sdk::types::{PermissionResult, QueryOptions, SdkMessage};
+use crate::modules::claude::sdk::types::{
+    PermissionResult, QueryOptions, SdkMessage, StreamDelta, StreamEventBody,
+};
 use crate::modules::claude::session::ClaudeSession;
 
 use super::run::ClaudeEnhancedMode;
 
-/// A tool_use block tracked from assistant messages, used to resolve
-/// the tool_use.id when a control_request arrives.
+/// 从 assistant 消息中跟踪的 tool_use 块，用于在收到
+/// control_request 时解析 tool_use.id。
 struct TrackedToolCall {
     id: String,
     name: String,
@@ -28,8 +30,8 @@ struct TrackedToolCall {
     used: bool,
 }
 
-/// Resolve the tool_use.id for a permission request by matching tool name and input
-/// against tracked tool calls (most recent first).
+/// 通过匹配工具名和输入参数，从已跟踪的 tool call 中（最近的优先）
+/// 解析权限请求对应的 tool_use.id。
 fn resolve_tool_call_id(
     tracked: &mut Vec<TrackedToolCall>,
     tool_name: &str,
@@ -45,10 +47,10 @@ fn resolve_tool_call_id(
     None
 }
 
-/// Remote launcher for Claude.
+/// Claude 远程启动器。
 ///
-/// Spawns the `claude` CLI process in interactive mode (--input-format stream-json),
-/// enabling bidirectional communication for streaming and permission handling.
+/// 以交互模式（--input-format stream-json）启动 `claude` CLI 进程，
+/// 实现双向通信，支持流式输出和权限请求处理。
 pub async fn claude_remote_launcher(
     session: &Arc<ClaudeSession<ClaudeEnhancedMode>>,
 ) -> LoopResult {
@@ -57,30 +59,28 @@ pub async fn claude_remote_launcher(
 
     let permission_handler = Arc::new(Mutex::new(PermissionHandler::new()));
 
-    // Streaming state for typewriter effect
+    // 流式输出的打字机效果状态
     let mut streaming_message_id: Option<String> = None;
-    let mut accumulated_text = String::new();
 
-    // Track the last assistant message per turn so we can send a final
-    // complete message (with thinking blocks + usage) when Result arrives.
+    // 跟踪每轮最后一条 assistant 消息，以便在收到 Result 时
+    // 发送包含 thinking 块和 usage 的完整消息。
     let mut last_assistant_content: Option<Vec<Value>> = None;
     let mut last_assistant_usage: Option<Value> = None;
 
-    // Track tool_use blocks from assistant messages so we can resolve
-    // the tool_use.id when a control_request arrives (the SDK's request_id
-    // is different from the tool_use.id).
+    // 跟踪 assistant 消息中的 tool_use 块，以便在收到 control_request 时
+    // 解析 tool_use.id（SDK 的 request_id 与 tool_use.id 不同）。
     let mut tracked_tool_calls: Vec<TrackedToolCall> = Vec::new();
-    // Map tool_use.id → SDK request_id (needed to send control_response)
+    // tool_use.id → SDK request_id 的映射（发送 control_response 时需要）
     let mut tool_use_to_request_id: HashMap<String, String> = HashMap::new();
 
-    // The interactive query handle (lazily spawned on first message)
+    // 交互式查询句柄（首条消息时惰性启动）
     let mut query_handle: Option<query::InteractiveQuery> = None;
     let mut current_mode_hash: Option<String> = None;
 
     loop {
         info!("[claudeRemoteLauncher] Waiting for messages from queue...");
 
-        // Wait for either a queued message or a switch request.
+        // 等待队列消息或切换请求
         let batch = select! {
             batch = session.base.queue.wait_for_messages() => {
                 match batch {
@@ -108,8 +108,8 @@ pub async fn claude_remote_launcher(
         let mode = batch.mode;
         let is_isolate = batch.isolate;
 
-        // If the mode hash changed (e.g. model or permission mode switch),
-        // kill the existing process so it gets re-spawned with new parameters.
+        // 如果 mode hash 变了（如模型或权限模式切换），
+        // 杀掉现有进程以便用新参数重新启动。
         let mode_changed = current_mode_hash.as_ref().is_some_and(|h| *h != batch.hash);
         if mode_changed && query_handle.is_some() {
             info!(
@@ -123,7 +123,6 @@ pub async fn claude_remote_launcher(
             query_handle = None;
             session.active_pid.store(0, Ordering::Relaxed);
             streaming_message_id = None;
-            accumulated_text.clear();
             tracked_tool_calls.clear();
             tool_use_to_request_id.clear();
         }
@@ -139,14 +138,13 @@ pub async fn claude_remote_launcher(
             }
         );
 
-        // Reset state for isolate messages (e.g., /clear)
+        // 重置隔离消息的状态（如 /clear）
         if is_isolate {
             permission_handler.lock().await.reset();
             streaming_message_id = None;
-            accumulated_text.clear();
             tracked_tool_calls.clear();
             tool_use_to_request_id.clear();
-            // Close existing process and force re-spawn
+            // 关闭现有进程并强制重新启动
             if let Some(ref qh) = query_handle {
                 qh.close_stdin().await;
             }
@@ -154,13 +152,13 @@ pub async fn claude_remote_launcher(
             session.active_pid.store(0, Ordering::Relaxed);
         }
 
-        // Spawn or reuse the interactive Claude process
+        // 启动或复用交互式 Claude 进程
         let needs_spawn = query_handle.is_none();
         if needs_spawn {
             let mut resume_id = session.base.session_id.lock().await.clone();
 
-            // If no session_id yet, check claude_args for --resume token
-            // (passed by runner when resuming an inactive session)
+            // 如果还没有 session_id，检查 claude_args 中是否有 --resume 参数
+            // （runner 恢复非活跃会话时传入）
             if resume_id.is_none() {
                 if let Some(ref args) = *session.claude_args.lock().await {
                     if let Some(pos) = args.iter().position(|a| a == "--resume") {
@@ -234,7 +232,7 @@ pub async fn claude_remote_launcher(
 
         let qh = query_handle.as_ref().unwrap();
 
-        // Send user message via stdin
+        // 通过 stdin 发送用户消息
         if let Err(e) = qh.send_user_message(&prompt).await {
             warn!("[claudeRemoteLauncher] Failed to send message: {}", e);
             query_handle = None;
@@ -244,7 +242,7 @@ pub async fn claude_remote_launcher(
 
         session.base.on_thinking_change(true).await;
 
-        // Process SDK messages until we get a Result (turn complete)
+        // 处理 SDK 消息直到收到 Result（轮次结束）
         let mut got_result = false;
         let should_switch = false;
 
@@ -299,20 +297,20 @@ pub async fn claude_remote_launcher(
                         parent_tool_use_id
                     );
 
-                    // Always track latest content + usage for the final message
+                    // 始终跟踪最新的 content + usage 用于最终消息
                     last_assistant_content = Some(message.content.clone());
                     if message.usage.is_some() {
                         last_assistant_usage = message.usage.clone();
                     }
 
-                    // Track tool_use blocks for permission ID resolution
+                    // 跟踪 tool_use 块用于权限 ID 解析
                     for block in &message.content {
                         if block.get("type").and_then(|v| v.as_str()) == Some("tool_use")
                             && let Some(id) = block.get("id").and_then(|v| v.as_str())
                         {
                             let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
                             let input = block.get("input").cloned().unwrap_or(Value::Null);
-                            // Only add if not already tracked
+                            // 仅在未跟踪时添加
                             if !tracked_tool_calls.iter().any(|tc| tc.id == id) {
                                 tracked_tool_calls.push(TrackedToolCall {
                                     id: id.to_string(),
@@ -324,52 +322,19 @@ pub async fn claude_remote_launcher(
                         }
                     }
 
-                    // Extract text for streaming
-                    let mut current_text = String::new();
-                    for block in &message.content {
-                        if let Some(block_type) = block.get("type").and_then(|v| v.as_str())
-                            && block_type == "text"
-                            && let Some(text) = block.get("text").and_then(|v| v.as_str())
-                        {
-                            current_text.push_str(text);
-                        }
-                    }
+                    // 含非文本内容（tool_use 等）时，结束流并发送完整消息
+                    let has_non_text = message.content.iter().any(|block| {
+                        block.get("type").and_then(|v| v.as_str()) != Some("text")
+                            && block.get("type").and_then(|v| v.as_str()) != Some("thinking")
+                    });
 
-                    let is_text_only = message
-                        .content
-                        .iter()
-                        .all(|block| block.get("type").and_then(|v| v.as_str()) == Some("text"));
-
-                    if is_text_only && !current_text.is_empty() {
-                        if streaming_message_id.is_none() {
-                            streaming_message_id = Some(uuid::Uuid::new_v4().to_string());
-                            accumulated_text.clear();
-                        }
-
-                        let mid = streaming_message_id.as_ref().unwrap();
-                        let delta_text = if current_text.starts_with(&accumulated_text) {
-                            &current_text[accumulated_text.len()..]
-                        } else {
-                            &current_text
-                        };
-
-                        if !delta_text.is_empty() {
-                            session
-                                .base
-                                .ws_client
-                                .send_message_delta(mid, delta_text, false)
-                                .await;
-                            accumulated_text = current_text.clone();
-                        }
-                    } else {
-                        // Non-text content - finalize stream and send complete message
+                    if has_non_text {
                         if let Some(mid) = streaming_message_id.take() {
                             session
                                 .base
                                 .ws_client
-                                .send_message_delta(&mid, &accumulated_text, true)
+                                .send_message_delta(&mid, "", true)
                                 .await;
-                            accumulated_text.clear();
                         }
 
                         session
@@ -392,6 +357,8 @@ pub async fn claude_remote_launcher(
                             })
                             .await;
                     }
+                    // 纯文本 assistant 消息不再在此处发送，
+                    // 流式输出由 StreamEvent delta 处理
                 }
                 SdkMessage::User {
                     message,
@@ -401,10 +368,9 @@ pub async fn claude_remote_launcher(
                         "[claudeRemoteLauncher] User: parent={:?}",
                         parent_tool_use_id
                     );
-                    // Use "assistant" as outer role so the frontend routes through
-                    // normalizeAgentRecord → normalizeUserOutput, which handles
-                    // tool_result content blocks. The inner data.type="user" preserves
-                    // the original message semantics.
+                    // 外层 role 用 "assistant" 以便前端通过
+                    // normalizeAgentRecord → normalizeUserOutput 处理
+                    // tool_result 内容块。内层 data.type="user" 保留原始语义。
                     session
                         .base
                         .ws_client
@@ -441,23 +407,22 @@ pub async fn claude_remote_launcher(
                         subtype, num_turns, total_cost_usd, duration_ms, is_error
                     );
 
-                    // Finalize any ongoing stream
+                    // 结束进行中的流
                     if let Some(mid) = streaming_message_id.take() {
                         session
                             .base
                             .ws_client
-                            .send_message_delta(&mid, &accumulated_text, true)
+                            .send_message_delta(&mid, "", true)
                             .await;
-                        accumulated_text.clear();
                     }
 
-                    // Prefer Result usage (has cache_* fields), fall back to last assistant usage
+                    // 优先使用 Result 的 usage（含 cache_* 字段），回退到最后一条 assistant 的 usage
                     let final_usage = result_usage
                         .and_then(|u| serde_json::to_value(u).ok())
                         .or(last_assistant_usage.take());
 
-                    // Send the final complete message with full content + usage.
-                    // This includes thinking blocks that streaming deltas skipped.
+                    // 发送包含完整 content + usage 的最终消息。
+                    // 包括流式 delta 跳过的 thinking 块。
                     if let Some(content) = last_assistant_content.take() {
                         let has_content = content
                             .iter()
@@ -514,14 +479,14 @@ pub async fn claude_remote_launcher(
                         session.base.on_session_found(&result_session_id).await;
                     }
 
-                    // Clean up turn state
+                    // 清理轮次状态
                     tracked_tool_calls.clear();
                     tool_use_to_request_id.clear();
                     last_assistant_content = None;
                     last_assistant_usage = None;
 
-                    // Clear completedRequests from agent state so stale entries
-                    // don't create phantom tool cards after page refresh.
+                    // 清除 agent state 中的 completedRequests，避免页面刷新后
+                    // 残留的条目产生幽灵工具卡片。
                     let _ = session
                         .base
                         .ws_client
@@ -533,7 +498,7 @@ pub async fn claude_remote_launcher(
                         })
                         .await;
 
-                    // Turn complete - break to wait for next user message
+                    // 轮次结束 - 跳出循环等待下一条用户消息
                     got_result = true;
                     break;
                 }
@@ -544,9 +509,8 @@ pub async fn claude_remote_launcher(
                     let tool_name = request.tool_name.clone().unwrap_or_default();
                     let tool_input = request.input.clone();
 
-                    // Resolve the tool_use.id from tracked assistant messages.
-                    // The frontend matches permissions to tool cards by tool_use.id,
-                    // not by the SDK's request_id.
+                    // 从已跟踪的 assistant 消息中解析 tool_use.id。
+                    // 前端通过 tool_use.id（而非 SDK 的 request_id）匹配权限和工具卡片。
                     let permission_key =
                         resolve_tool_call_id(&mut tracked_tool_calls, &tool_name, &tool_input)
                             .unwrap_or_else(|| request_id.clone());
@@ -556,19 +520,19 @@ pub async fn claude_remote_launcher(
                         request_id, permission_key, tool_name
                     );
 
-                    // Store mapping so we can send control_response with the SDK's request_id
+                    // 存储映射以便用 SDK 的 request_id 发送 control_response
                     tool_use_to_request_id.insert(permission_key.clone(), request_id.clone());
 
-                    // Create oneshot channel for the response
+                    // 创建 oneshot channel 接收响应
                     let (tx, rx) =
-                        tokio::sync::oneshot::channel::<(bool, Option<serde_json::Value>)>();
+                        oneshot::channel::<(bool, Option<Value>)>();
                     session
                         .pending_permissions
                         .lock()
                         .await
                         .insert(permission_key.clone(), tx);
 
-                    // Update agent state with the permission request (keyed by tool_use.id)
+                    // 更新 agent state 中的权限请求（以 tool_use.id 为 key）
                     let key_for_state = permission_key.clone();
                     let tool_name_for_state = tool_name.clone();
                     let tool_input_for_state = tool_input.clone();
@@ -600,7 +564,7 @@ pub async fn claude_remote_launcher(
                         })
                         .await;
 
-                    // Wait for the permission response from the web UI
+                    // 等待来自 Web UI 的权限响应
                     let sdk_rid = request_id;
                     match rx.await {
                         Ok((approved, updated_input)) => {
@@ -636,7 +600,7 @@ pub async fn claude_remote_launcher(
                             }
                         }
                         Err(_) => {
-                            // Channel dropped (session closing), deny
+                            // channel 被丢弃（会话关闭中），拒绝请求
                             if let Some(qh_ref) = query_handle.as_ref() {
                                 let _ =
                                     qh_ref.send_control_error(&sdk_rid, "Session closing").await;
@@ -652,8 +616,8 @@ pub async fn claude_remote_launcher(
                 }
                 SdkMessage::ControlCancelRequest { request_id } => {
                     debug!("[claudeRemoteLauncher] Control cancel: id={}", request_id);
-                    // The cancel may come with the SDK's request_id; find the
-                    // permission_key (tool_use.id) we mapped it to.
+                    // 取消请求可能携带 SDK 的 request_id；找到我们映射的
+                    // permission_key（tool_use.id）。
                     let permission_key = tool_use_to_request_id
                         .iter()
                         .find(|(_, v)| **v == request_id)
@@ -667,7 +631,7 @@ pub async fn claude_remote_launcher(
                         .remove(&permission_key);
                     tool_use_to_request_id.remove(&permission_key);
 
-                    // Remove from agent state
+                    // 从 agent state 中移除
                     let _ = session
                         .base
                         .ws_client
@@ -681,6 +645,27 @@ pub async fn claude_remote_launcher(
                         })
                         .await;
                 }
+                SdkMessage::StreamEvent { event, .. } => match event {
+                    StreamEventBody::ContentBlockDelta {
+                        delta: StreamDelta::TextDelta { text },
+                        ..
+                    } => {
+                        if streaming_message_id.is_none() {
+                            streaming_message_id = Some(uuid::Uuid::new_v4().to_string());
+                        }
+                        let mid = streaming_message_id.as_ref().unwrap();
+                        session
+                            .base
+                            .ws_client
+                            .send_message_delta(mid, &text, false)
+                            .await;
+                    }
+                    StreamEventBody::ContentBlockStop { .. } => {
+                        // content block 结束，但不 finalize 流——
+                        // 等 Result 或下一个非文本 Assistant 消息来 finalize
+                    }
+                    _ => {}
+                },
                 SdkMessage::Log { log } => {
                     debug!(
                         "[claudeRemoteLauncher] SDK log [{}]: {}",
@@ -691,9 +676,9 @@ pub async fn claude_remote_launcher(
         }
 
         session.base.on_thinking_change(false).await;
-        // Only consume --resume after we've successfully received the session ID
-        // from the Claude process. If the process was killed before sending the
-        // System message, session_id is still None and we need --resume for re-spawn.
+        // 仅在成功从 Claude 进程收到 session ID 后才消费 --resume。
+        // 如果进程在发送 System 消息前被杀掉，session_id 仍为 None，
+        // 重新启动时还需要 --resume。
         if session.base.session_id.lock().await.is_some() {
             session.consume_one_time_flags().await;
         }
@@ -705,7 +690,7 @@ pub async fn claude_remote_launcher(
             return LoopResult::Switch;
         }
 
-        // If process died (no result), clear handle so next message re-spawns
+        // 如果进程意外退出（没有 result），清除句柄以便下条消息重新启动
         if !got_result {
             query_handle = None;
             session.active_pid.store(0, Ordering::Relaxed);
