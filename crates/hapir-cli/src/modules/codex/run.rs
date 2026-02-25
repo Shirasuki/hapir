@@ -10,7 +10,10 @@ use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
 
 use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
 use crate::agent::cleanup::cleanup_agent_session;
-use crate::agent::common_rpc::{ApplyConfigFn, CommonRpc, MessagePreProcessor, OnKillFn};
+use crate::agent::common_rpc::{
+    ApplyConfigFn, CommonRpc, CommonRpcConfig, MessagePreProcessor, OnKillFn,
+    register_acp_abort_handler, register_switch_handler,
+};
 use crate::agent::local_launch_policy::{
     LocalLaunchContext, LocalLaunchExitReason, get_local_launch_exit_reason,
 };
@@ -22,13 +25,14 @@ use hapir_acp::types::{
     AgentBackend, AgentMessage, AgentSessionConfig, PermissionResponse, PromptContent,
 };
 use hapir_infra::config::CliConfiguration;
-use hapir_infra::rpc::RpcRegistry;
+use hapir_infra::rpc::{EventRegistry, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
 use hapir_infra::ws::session_client::WsSessionClient;
 
 use super::session_scanner::CodexSessionScanner;
 use super::{CodexMode, compute_mode_hash};
+use crate::terminal::{TerminalManager, TerminalManagerOptions};
 
 pub(crate) fn codex_message(data: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
@@ -202,15 +206,6 @@ pub async fn run_codex(
         text
     }));
 
-    let rpc = CommonRpc::new(&ws_client, queue.clone(), "runCodex");
-    rpc.on_user_message(
-        current_mode.clone(),
-        Some(session_base.switch_notify.clone()),
-        Some(Arc::new(std::sync::Mutex::new(starting_mode))),
-        Some(pre_process),
-    )
-    .await;
-
     let apply_config: Arc<ApplyConfigFn<CodexMode>> =
         Arc::new(Box::new(|m, params| {
             if let Some(pm) = params.get("permissionMode") {
@@ -224,10 +219,6 @@ pub async fn run_codex(
                 m.collaboration_mode = Some(cm.to_string());
             }
         }));
-    rpc.set_session_config(current_mode.clone(), apply_config)
-        .await;
-
-    rpc.switch(session_base.switch_notify.clone()).await;
 
     let backend_for_kill = backend.clone();
     let on_kill: OnKillFn = Arc::new(move || {
@@ -236,9 +227,23 @@ pub async fn run_codex(
             let _ = b.disconnect().await;
         })
     });
-    rpc.kill_session(Some(on_kill)).await;
 
-    rpc.acp_abort(
+    let rpc = CommonRpc::new(CommonRpcConfig {
+        queue: queue.clone(),
+        log_tag: "runCodex",
+        current_mode: current_mode.clone(),
+        apply_config,
+        on_kill: Some(on_kill),
+        switch_notify: Some(session_base.switch_notify.clone()),
+        session_mode: Some(Arc::new(std::sync::Mutex::new(starting_mode))),
+        pre_process: Some(pre_process),
+    });
+    ws_client.register_rpc_group(&rpc).await;
+
+    register_switch_handler(&ws_client, "runCodex", session_base.switch_notify.clone()).await;
+    register_acp_abort_handler(
+        &ws_client,
+        "runCodex",
         backend.clone() as Arc<dyn AgentBackend>,
         session_base.clone(),
     )
@@ -283,7 +288,7 @@ pub async fn run_codex(
     let backend_for_perm = backend.clone();
     let sb_for_perm = session_base.clone();
     ws_client
-        .register("permission", move |params| {
+        .register_rpc("permission", move |params| {
             let b = backend_for_perm.clone();
             let sb = sb_for_perm.clone();
             async move {
@@ -369,8 +374,11 @@ pub async fn run_codex(
         })
         .await;
 
-    let terminal_mgr =
-        crate::terminal::setup_terminal(&ws_client, &boot.session_id, &working_directory).await;
+    let terminal_mgr = Arc::new(TerminalManager::new(TerminalManagerOptions {
+        session_id: boot.session_id.clone(),
+        session_path: Some(working_directory.clone()),
+    }));
+    ws_client.register_event_group(terminal_mgr.as_ref()).await;
 
     let _ = ws_client.connect(Duration::from_secs(10)).await;
 

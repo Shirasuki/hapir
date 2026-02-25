@@ -8,7 +8,9 @@ use hapir_shared::schemas::SessionStartedBy;
 
 use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
 use crate::agent::cleanup::cleanup_agent_session;
-use crate::agent::common_rpc::{ApplyConfigFn, CommonRpc, OnKillFn};
+use crate::agent::common_rpc::{
+    ApplyConfigFn, CommonRpc, CommonRpcConfig, OnKillFn, register_acp_abort_handler,
+};
 use crate::agent::local_launch_policy::{
     LocalLaunchContext, LocalLaunchExitReason, get_local_launch_exit_reason,
 };
@@ -17,10 +19,12 @@ use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions};
 use hapir_acp::acp_sdk::backend::AcpSdkBackend;
 use hapir_acp::types::{AgentBackend, AgentMessage, AgentSessionConfig, PromptContent};
 use hapir_infra::config::CliConfiguration;
+use hapir_infra::rpc::{EventRegistry, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::ws::session_client::WsSessionClient;
 
 use super::{OpencodeMode, compute_mode_hash};
+use crate::terminal::{TerminalManager, TerminalManagerOptions};
 
 async fn forward_agent_message(ws: &WsSessionClient, msg: AgentMessage) {
     match msg {
@@ -279,10 +283,6 @@ pub async fn run_opencode(
         None,
     ));
 
-    let rpc = CommonRpc::new(&ws_client, queue.clone(), "runOpenCode");
-    rpc.on_user_message(current_mode.clone(), None, None, None)
-        .await;
-
     let apply_config: Arc<ApplyConfigFn<OpencodeMode>> =
         Arc::new(Box::new(|m, params| {
             if let Some(pm) = params.get("permissionMode") {
@@ -292,8 +292,6 @@ pub async fn run_opencode(
                 }
             }
         }));
-    rpc.set_session_config(current_mode.clone(), apply_config)
-        .await;
 
     let backend_for_kill = backend.clone();
     let on_kill: OnKillFn = Arc::new(move || {
@@ -302,16 +300,32 @@ pub async fn run_opencode(
             let _ = b.disconnect().await;
         })
     });
-    rpc.kill_session(Some(on_kill)).await;
 
-    rpc.acp_abort(
+    let rpc = CommonRpc::new(CommonRpcConfig {
+        queue: queue.clone(),
+        log_tag: "runOpenCode",
+        current_mode: current_mode.clone(),
+        apply_config,
+        on_kill: Some(on_kill),
+        switch_notify: None,
+        session_mode: None,
+        pre_process: None,
+    });
+    ws_client.register_rpc_group(&rpc).await;
+
+    register_acp_abort_handler(
+        &ws_client,
+        "runOpenCode",
         backend.clone() as Arc<dyn AgentBackend>,
         session_base.clone(),
     )
     .await;
 
-    let terminal_mgr =
-        crate::terminal::setup_terminal(&ws_client, &boot.session_id, &working_directory).await;
+    let terminal_mgr = Arc::new(TerminalManager::new(TerminalManagerOptions {
+        session_id: boot.session_id.clone(),
+        session_path: Some(working_directory.clone()),
+    }));
+    ws_client.register_event_group(terminal_mgr.as_ref()).await;
 
     let _ = ws_client.connect(Duration::from_secs(10)).await;
 

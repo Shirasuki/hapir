@@ -1,7 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -13,15 +13,18 @@ use super::local_launcher::claude_local_launcher;
 use super::remote_launcher::claude_remote_launcher;
 use crate::agent::bootstrap::{bootstrap_agent, AgentBootstrapConfig};
 use crate::agent::cleanup::cleanup_agent_session;
-use crate::agent::common_rpc::{ApplyConfigFn, CommonRpc, MessagePreProcessor};
+use crate::agent::common_rpc::{
+    ApplyConfigFn, CommonRpc, CommonRpcConfig, MessagePreProcessor,
+};
 use crate::agent::loop_base::{run_local_remote_session, LoopOptions};
 use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions};
 use crate::modules::claude::hook_server::start_hook_server;
 use crate::modules::claude::session::ClaudeSession;
-use crate::terminal;
+use crate::terminal::TerminalManager;
+use crate::terminal::TerminalManagerOptions;
 use hapir_infra::config::CliConfiguration;
 use hapir_infra::handlers::uploads;
-use hapir_infra::rpc::RpcRegistry;
+use hapir_infra::rpc::{EventRegistry, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::save_terminal_state;
 use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
@@ -203,15 +206,6 @@ pub async fn run_claude(
         }
     }));
 
-    let rpc = CommonRpc::new(&session_client, queue.clone(), "runClaude");
-    rpc.on_user_message(
-        current_mode.clone(),
-        Some(session_base.switch_notify.clone()),
-        Some(hook_session_mode.clone()),
-        Some(pre_process),
-    )
-    .await;
-
     let apply_config: Arc<ApplyConfigFn<ClaudeEnhancedMode>> = Arc::new(Box::new(|m, params| {
         if let Some(pm) = params.get("permissionMode") {
             if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
@@ -224,104 +218,25 @@ pub async fn run_claude(
             m.model = Some(mm.to_string());
         }
     }));
-    rpc.set_session_config(current_mode.clone(), apply_config)
-        .await;
 
-    rpc.kill_session(None).await;
-    rpc.switch(session_base.switch_notify.clone()).await;
+    let rpc = CommonRpc::new(CommonRpcConfig {
+        queue: queue.clone(),
+        log_tag: "runClaude",
+        current_mode: current_mode.clone(),
+        apply_config,
+        on_kill: None,
+        switch_notify: Some(session_base.switch_notify.clone()),
+        session_mode: Some(hook_session_mode.clone()),
+        pre_process: Some(pre_process),
+    });
+    session_client.register_rpc_group(&rpc).await;
+    session_client.register_rpc_group(claude_session.as_ref()).await;
 
-    // Permission responses are delivered via oneshot channels from pending_permissions
-    let cs_for_permission = claude_session.clone();
-    session_client
-        .register("permission", move |params| {
-            let cs = cs_for_permission.clone();
-            async move {
-                debug!("[runClaude] permission RPC received: {:?}", params);
-
-                let id = params.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                let approved = params
-                    .get("approved")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                let updated_input = params.get("updatedInput").cloned();
-
-                if let Some(tx) = cs.pending_permissions.lock().await.remove(id) {
-                    let _ = tx.send((approved, updated_input));
-
-                    let id_clone = id.to_string();
-                    let status = if approved { "approved" } else { "denied" };
-                    let completed_at = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as f64;
-
-                    let _ = cs
-                        .base
-                        .ws_client
-                        .update_agent_state(move |mut state| {
-                            if let Some(requests) =
-                                state.get_mut("requests").and_then(|v| v.as_object_mut())
-                                && let Some(request) = requests.remove(&id_clone)
-                            {
-                                let completed_requests = state
-                                    .get_mut("completedRequests")
-                                    .and_then(|v| v.as_object_mut())
-                                    .map(|obj| obj.clone())
-                                    .unwrap_or_default();
-
-                                let mut updated_completed = completed_requests.clone();
-                                let mut completed_request =
-                                    request.as_object().cloned().unwrap_or_default();
-                                completed_request
-                                    .insert("status".to_string(), serde_json::json!(status));
-                                completed_request.insert(
-                                    "completedAt".to_string(),
-                                    serde_json::json!(completed_at),
-                                );
-
-                                updated_completed
-                                    .insert(id_clone.clone(), serde_json::json!(completed_request));
-                                state["completedRequests"] = serde_json::json!(updated_completed);
-                            }
-                            state
-                        })
-                        .await;
-                }
-
-                serde_json::json!({"ok": true})
-            }
-        })
-        .await;
-
-    // Abort kills the active Claude process by PID rather than using an ACP cancel
-    let cs_for_abort = claude_session.clone();
-    session_client
-        .register("abort", move |_params| {
-            let cs = cs_for_abort.clone();
-            async move {
-                debug!("[runClaude] abort RPC received");
-                let pid = cs.active_pid.load(Ordering::Relaxed);
-                if pid != 0 {
-                    debug!("[runClaude] Terminating PID {}", pid);
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = std::process::Command::new("taskkill")
-                            .args(["/PID", &pid.to_string(), "/T"])
-                            .spawn();
-                    }
-                }
-                cs.pending_permissions.lock().await.clear();
-                cs.base.on_thinking_change(false).await;
-                serde_json::json!({"ok": true})
-            }
-        })
-        .await;
-
-    let terminal_mgr = terminal::setup_terminal(&session_client, &session_id, &working_directory).await;
+    let terminal_mgr = Arc::new(TerminalManager::new(TerminalManagerOptions {
+        session_id: session_id.clone(),
+        session_path: Some(working_directory.clone()),
+    }));
+    session_client.register_event_group(terminal_mgr.as_ref()).await;
 
     let _ = session_client.connect(Duration::from_secs(10)).await;
 

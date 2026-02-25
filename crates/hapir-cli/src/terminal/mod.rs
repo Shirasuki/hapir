@@ -1,16 +1,19 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::{Read, Write};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use tokio::sync::Mutex;
-use tokio::sync::mpsc;
-use tracing::{debug, warn};
-
+use hapir_infra::rpc::EventHandlerGroup;
+use hapir_infra::ws::session_client::WsSessionClient;
 use hapir_shared::socket::{
     TerminalErrorPayload, TerminalExitPayload, TerminalOutputPayload, TerminalReadyPayload,
 };
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use tokio::sync::mpsc;
+use tokio::sync::Mutex;
+use tracing::{debug, warn};
 
 const DEFAULT_IDLE_TIMEOUT_MS: u64 = 15 * 60_000;
 const DEFAULT_MAX_TERMINALS: usize = 4;
@@ -40,8 +43,6 @@ pub enum TerminalEvent {
 pub struct TerminalManagerOptions {
     pub session_id: String,
     pub session_path: Option<String>,
-    pub idle_timeout_ms: Option<u64>,
-    pub max_terminals: Option<usize>,
 }
 
 struct TerminalRuntime {
@@ -73,14 +74,16 @@ fn build_filtered_env() -> Vec<(String, String)> {
         .collect()
 }
 
+#[derive(Clone)]
 pub struct TerminalManager {
-    session_id: String,
-    session_path: Option<String>,
+    session_id: Arc<String>,
+    session_path: Arc<Option<String>>,
     idle_timeout_ms: u64,
     max_terminals: usize,
     terminals: Arc<Mutex<HashMap<String, TerminalRuntime>>>,
     event_tx: mpsc::UnboundedSender<TerminalEvent>,
-    filtered_env: Vec<(String, String)>,
+    event_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<TerminalEvent>>>>,
+    filtered_env: Arc<Vec<(String, String)>>,
 }
 
 impl std::fmt::Debug for TerminalManager {
@@ -93,27 +96,25 @@ impl std::fmt::Debug for TerminalManager {
 }
 
 impl TerminalManager {
-    /// Create a new terminal manager. Returns the manager and a receiver for terminal events.
-    pub fn new(options: TerminalManagerOptions) -> (Self, mpsc::UnboundedReceiver<TerminalEvent>) {
+    /// Create a new terminal manager.
+    pub fn new(options: TerminalManagerOptions) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let idle_timeout_ms = options.idle_timeout_ms.unwrap_or_else(|| {
-            resolve_env_number("HAPIR_TERMINAL_IDLE_TIMEOUT_MS", DEFAULT_IDLE_TIMEOUT_MS)
-        });
-        let max_terminals = options.max_terminals.unwrap_or_else(|| {
+        let idle_timeout_ms =
+            resolve_env_number("HAPIR_TERMINAL_IDLE_TIMEOUT_MS", DEFAULT_IDLE_TIMEOUT_MS);
+        let max_terminals =
             resolve_env_number("HAPIR_TERMINAL_MAX_TERMINALS", DEFAULT_MAX_TERMINALS as u64)
-                as usize
-        });
+                as usize;
 
-        let mgr = Self {
-            session_id: options.session_id,
-            session_path: options.session_path,
+        Self {
+            session_id: Arc::new(options.session_id),
+            session_path: Arc::new(options.session_path),
             idle_timeout_ms,
             max_terminals,
             terminals: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
-            filtered_env: build_filtered_env(),
-        };
-        (mgr, event_rx)
+            event_rx: Arc::new(Mutex::new(Some(event_rx))),
+            filtered_env: Arc::new(build_filtered_env()),
+        }
     }
 
     /// Spawn a new terminal or reuse an existing one with the same ID.
@@ -136,7 +137,7 @@ impl TerminalManager {
             let new_cancel = self.spawn_idle_timer(terminal_id);
             runtime.idle_cancel = Some(new_cancel);
             self.emit(TerminalEvent::Ready(TerminalReadyPayload {
-                session_id: self.session_id.clone(),
+                session_id: (*self.session_id).clone(),
                 terminal_id: terminal_id.to_string(),
             }));
             return;
@@ -167,7 +168,7 @@ impl TerminalManager {
         };
 
         let shell = resolve_shell();
-        let cwd = self.session_path.clone().unwrap_or_else(|| {
+        let cwd = (*self.session_path).clone().unwrap_or_else(|| {
             std::env::current_dir()
                 .unwrap_or_default()
                 .to_string_lossy()
@@ -177,7 +178,7 @@ impl TerminalManager {
         let mut cmd = CommandBuilder::new(&shell);
         cmd.cwd(&cwd);
         // Set filtered environment
-        for (key, value) in &self.filtered_env {
+        for (key, value) in self.filtered_env.as_slice() {
             cmd.env(key, value);
         }
 
@@ -228,7 +229,7 @@ impl TerminalManager {
         self.spawn_exit_watcher(terminal_id.to_string());
 
         self.emit(TerminalEvent::Ready(TerminalReadyPayload {
-            session_id: self.session_id.clone(),
+            session_id: (*self.session_id).clone(),
             terminal_id: terminal_id.to_string(),
         }));
     }
@@ -307,7 +308,7 @@ impl TerminalManager {
 
     fn emit_error(&self, terminal_id: &str, message: &str) {
         self.emit(TerminalEvent::Error(TerminalErrorPayload {
-            session_id: self.session_id.clone(),
+            session_id: (*self.session_id).clone(),
             terminal_id: terminal_id.to_string(),
             message: message.to_string(),
         }));
@@ -326,7 +327,7 @@ impl TerminalManager {
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_millis(timeout)) => {
                         let _ = event_tx.send(TerminalEvent::Error(TerminalErrorPayload {
-                            session_id: session_id.clone(),
+                            session_id: (*session_id).clone(),
                             terminal_id: tid.clone(),
                             message: "Terminal closed due to inactivity.".to_string(),
                         }));
@@ -362,7 +363,7 @@ impl TerminalManager {
                         let text = String::from_utf8_lossy(&buf[..n]).to_string();
                         if !text.is_empty() {
                             let _ = event_tx.send(TerminalEvent::Output(TerminalOutputPayload {
-                                session_id: session_id.clone(),
+                                session_id: (*session_id).clone(),
                                 terminal_id: terminal_id.clone(),
                                 data: text,
                             }));
@@ -391,7 +392,7 @@ impl TerminalManager {
                     Ok(Some(status)) => {
                         let code = status.exit_code() as i32;
                         let _ = event_tx.send(TerminalEvent::Exit(TerminalExitPayload {
-                            session_id: session_id.clone(),
+                            session_id: (*session_id).clone(),
                             terminal_id: terminal_id.clone(),
                             code: Some(code),
                             signal: None,
@@ -414,127 +415,126 @@ impl TerminalManager {
     }
 }
 
-/// Wire up a `TerminalManager` to a `WsSessionClient`, returning the manager.
-///
-/// Registers `terminal:open/write/resize/close` event handlers on the WebSocket
-/// and spawns a task that forwards PTY events back to the hub.
-pub async fn setup_terminal(
-    ws_client: &Arc<hapir_infra::ws::session_client::WsSessionClient>,
-    session_id: &str,
-    working_directory: &str,
-) -> Arc<TerminalManager> {
-    let (mgr, mut rx) = TerminalManager::new(TerminalManagerOptions {
-        session_id: session_id.to_string(),
-        session_path: Some(working_directory.to_string()),
-        idle_timeout_ms: None,
-        max_terminals: None,
-    });
-    let mgr = Arc::new(mgr);
+impl EventHandlerGroup<WsSessionClient> for TerminalManager {
+    fn register_event_handlers<'a>(
+        &'a self,
+        registry: &'a WsSessionClient,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let tm = self.clone();
+            registry
+                .on("terminal:open", move |data| {
+                    let m = tm.clone();
+                    tokio::spawn(async move {
+                        let tid = data
+                            .get("terminalId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let cols = data.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+                        let rows = data.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+                        debug!(terminal_id = %tid, cols, rows, "terminal:open received");
+                        m.create(&tid, cols, rows).await;
+                    });
+                })
+                .await;
 
-    let tm = mgr.clone();
-    ws_client
-        .on("terminal:open", move |data| {
-            let m = tm.clone();
-            tokio::spawn(async move {
-                let tid = data
-                    .get("terminalId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let cols = data.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-                let rows = data.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
-                debug!(terminal_id = %tid, cols, rows, "terminal:open received, creating PTY");
-                m.create(&tid, cols, rows).await;
-            });
+            let tm = self.clone();
+            registry
+                .on("terminal:write", move |data| {
+                    let m = tm.clone();
+                    tokio::spawn(async move {
+                        let tid = data
+                            .get("terminalId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let payload = data
+                            .get("data")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        m.write(&tid, &payload).await;
+                    });
+                })
+                .await;
+
+            let tm = self.clone();
+            registry
+                .on("terminal:resize", move |data| {
+                    let m = tm.clone();
+                    tokio::spawn(async move {
+                        let tid = data
+                            .get("terminalId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let cols = data.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+                        let rows = data.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+                        m.resize(&tid, cols, rows).await;
+                    });
+                })
+                .await;
+
+            let tm = self.clone();
+            registry
+                .on("terminal:close", move |data| {
+                    let m = tm.clone();
+                    tokio::spawn(async move {
+                        let tid = data
+                            .get("terminalId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        debug!(terminal_id = %tid, "terminal:close received");
+                        m.close(&tid).await;
+                    });
+                })
+                .await;
+
+            // Spawn event forwarding task
+            if let Some(mut rx) = self.event_rx.lock().await.take() {
+                let ws = registry.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = rx.recv().await {
+                        let (name, data) = match event {
+                            TerminalEvent::Ready(p) => (
+                                "terminal:ready",
+                                serde_json::json!({
+                                    "sessionId": p.session_id,
+                                    "terminalId": p.terminal_id,
+                                }),
+                            ),
+                            TerminalEvent::Output(p) => (
+                                "terminal:output",
+                                serde_json::json!({
+                                    "sessionId": p.session_id,
+                                    "terminalId": p.terminal_id,
+                                    "data": p.data,
+                                }),
+                            ),
+                            TerminalEvent::Exit(p) => (
+                                "terminal:exit",
+                                serde_json::json!({
+                                    "sessionId": p.session_id,
+                                    "terminalId": p.terminal_id,
+                                    "code": p.code,
+                                    "signal": p.signal,
+                                }),
+                            ),
+                            TerminalEvent::Error(p) => (
+                                "terminal:error",
+                                serde_json::json!({
+                                    "sessionId": p.session_id,
+                                    "terminalId": p.terminal_id,
+                                    "message": p.message,
+                                }),
+                            ),
+                        };
+                        ws.emit(name, data).await;
+                    }
+                });
+            }
         })
-        .await;
-
-    let tm = mgr.clone();
-    ws_client
-        .on("terminal:write", move |data| {
-            let m = tm.clone();
-            tokio::spawn(async move {
-                let tid = data
-                    .get("terminalId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let payload = data
-                    .get("data")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                m.write(&tid, &payload).await;
-            });
-        })
-        .await;
-
-    let tm = mgr.clone();
-    ws_client
-        .on("terminal:resize", move |data| {
-            let m = tm.clone();
-            tokio::spawn(async move {
-                let tid = data
-                    .get("terminalId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let cols = data.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-                let rows = data.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
-                m.resize(&tid, cols, rows).await;
-            });
-        })
-        .await;
-
-    let tm = mgr.clone();
-    ws_client
-        .on("terminal:close", move |data| {
-            let m = tm.clone();
-            tokio::spawn(async move {
-                let tid = data
-                    .get("terminalId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                debug!(terminal_id = %tid, "terminal:close received");
-                m.close(&tid).await;
-            });
-        })
-        .await;
-
-    let ws = ws_client.clone();
-    tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            let (name, data) = match event {
-                TerminalEvent::Ready(p) => (
-                    "terminal:ready",
-                    serde_json::json!({
-                        "sessionId": p.session_id, "terminalId": p.terminal_id,
-                    }),
-                ),
-                TerminalEvent::Output(p) => (
-                    "terminal:output",
-                    serde_json::json!({
-                        "sessionId": p.session_id, "terminalId": p.terminal_id, "data": p.data,
-                    }),
-                ),
-                TerminalEvent::Exit(p) => (
-                    "terminal:exit",
-                    serde_json::json!({
-                        "sessionId": p.session_id, "terminalId": p.terminal_id,
-                        "code": p.code, "signal": p.signal,
-                    }),
-                ),
-                TerminalEvent::Error(p) => (
-                    "terminal:error",
-                    serde_json::json!({
-                        "sessionId": p.session_id, "terminalId": p.terminal_id, "message": p.message,
-                    }),
-                ),
-            };
-            ws.emit(name, data).await;
-        }
-    });
-
-    mgr
+    }
 }
