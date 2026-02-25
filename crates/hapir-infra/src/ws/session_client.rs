@@ -275,22 +275,6 @@ impl WsSessionClient {
             .await;
     }
 
-    pub async fn register_rpc(
-        &self,
-        method: &str,
-        handler: impl Fn(Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync + 'static,
-    ) {
-        let scoped = rpc::scoped_method(&self.session_id, method);
-        info!(method = %scoped, "registering session-scoped RPC handler");
-        self.ws.register_rpc(&scoped, handler).await;
-        self.ws
-            .emit(
-                "rpc-register",
-                serde_json::to_value(&RpcRegisterRequest { method: scoped }).unwrap_or_default(),
-            )
-            .await;
-    }
-
     pub async fn on(
         &self,
         event: impl Into<String>,

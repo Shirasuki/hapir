@@ -21,6 +21,7 @@ use crate::modules::claude::session::ClaudeSession;
 use crate::terminal;
 use hapir_infra::config::CliConfiguration;
 use hapir_infra::handlers::uploads;
+use hapir_infra::rpc::RpcRegistry;
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::save_terminal_state;
 use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
@@ -232,9 +233,9 @@ pub async fn run_claude(
     // Permission responses are delivered via oneshot channels from pending_permissions
     let cs_for_permission = claude_session.clone();
     session_client
-        .register_rpc("permission", move |params| {
+        .register("permission", move |params| {
             let cs = cs_for_permission.clone();
-            Box::pin(async move {
+            async move {
                 debug!("[runClaude] permission RPC received: {:?}", params);
 
                 let id = params.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -288,16 +289,16 @@ pub async fn run_claude(
                 }
 
                 serde_json::json!({"ok": true})
-            })
+            }
         })
         .await;
 
     // Abort kills the active Claude process by PID rather than using an ACP cancel
     let cs_for_abort = claude_session.clone();
     session_client
-        .register_rpc("abort", move |_params| {
+        .register("abort", move |_params| {
             let cs = cs_for_abort.clone();
-            Box::pin(async move {
+            async move {
                 debug!("[runClaude] abort RPC received");
                 let pid = cs.active_pid.load(Ordering::Relaxed);
                 if pid != 0 {
@@ -316,7 +317,7 @@ pub async fn run_claude(
                 cs.pending_permissions.lock().await.clear();
                 cs.base.on_thinking_change(false).await;
                 serde_json::json!({"ok": true})
-            })
+            }
         })
         .await;
 

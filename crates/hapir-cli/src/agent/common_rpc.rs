@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info};
 
+use hapir_infra::rpc::RpcRegistry;
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::ws::session_client::WsSessionClient;
 
@@ -51,13 +52,13 @@ impl<'a, Mode: Clone + Send + 'static> CommonRpc<'a, Mode> {
         let queue = self.queue.clone();
         let log_tag = self.log_tag;
         self.ws
-            .register_rpc("on-user-message", move |params| {
+            .register("on-user-message", move |params| {
                 let q = queue.clone();
                 let mode = current_mode.clone();
                 let switch = switch_notify.clone();
                 let sm = session_mode.clone();
                 let pp = pre_process.clone();
-                Box::pin(async move {
+                async move {
                     let raw_text = params
                         .get("message")
                         .and_then(|v| v.as_str())
@@ -92,7 +93,7 @@ impl<'a, Mode: Clone + Send + 'static> CommonRpc<'a, Mode> {
                     }
 
                     serde_json::json!({"ok": true})
-                })
+                }
             })
             .await;
     }
@@ -107,15 +108,15 @@ impl<'a, Mode: Clone + Send + 'static> CommonRpc<'a, Mode> {
     ) {
         let log_tag = self.log_tag;
         self.ws
-            .register_rpc("set-session-config", move |params| {
+            .register("set-session-config", move |params| {
                 let mode = current_mode.clone();
                 let apply = apply_config.clone();
-                Box::pin(async move {
+                async move {
                     let mut m = mode.lock().await;
                     apply(&mut m, &params);
                     debug!("[{log_tag}] set-session-config applied");
                     serde_json::json!({"ok": true})
-                })
+                }
             })
             .await;
     }
@@ -127,17 +128,17 @@ impl<'a, Mode: Clone + Send + 'static> CommonRpc<'a, Mode> {
         let queue = self.queue.clone();
         let log_tag = self.log_tag;
         self.ws
-            .register_rpc("killSession", move |_params| {
+            .register("killSession", move |_params| {
                 let q = queue.clone();
                 let extra = on_kill.clone();
-                Box::pin(async move {
+                async move {
                     debug!("[{log_tag}] killSession RPC received");
                     q.close().await;
                     if let Some(f) = extra {
                         f().await;
                     }
                     serde_json::json!({"ok": true})
-                })
+                }
             })
             .await;
     }
@@ -146,13 +147,13 @@ impl<'a, Mode: Clone + Send + 'static> CommonRpc<'a, Mode> {
     pub async fn switch(&self, switch_notify: Arc<Notify>) {
         let log_tag = self.log_tag;
         self.ws
-            .register_rpc("switch", move |_params| {
+            .register("switch", move |_params| {
                 let notify = switch_notify.clone();
-                Box::pin(async move {
+                async move {
                     info!("[{log_tag}] switch RPC received, requesting mode switch");
                     notify.notify_one();
                     serde_json::json!({"ok": true})
-                })
+                }
             })
             .await;
     }
@@ -167,17 +168,17 @@ impl<'a, Mode: Clone + Send + 'static> CommonRpc<'a, Mode> {
     ) {
         let log_tag = self.log_tag;
         self.ws
-            .register_rpc("abort", move |_params| {
+            .register("abort", move |_params| {
                 let b = backend.clone();
                 let sb = session_base.clone();
-                Box::pin(async move {
+                async move {
                     debug!("[{log_tag}] abort RPC received");
                     if let Some(sid) = sb.session_id.lock().await.clone() {
                         let _ = b.cancel_prompt(&sid).await;
                     }
                     sb.on_thinking_change(false).await;
                     serde_json::json!({"ok": true})
-                })
+                }
             })
             .await;
     }

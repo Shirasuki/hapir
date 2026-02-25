@@ -22,6 +22,7 @@ use hapir_acp::types::{
     AgentBackend, AgentMessage, AgentSessionConfig, PermissionResponse, PromptContent,
 };
 use hapir_infra::config::CliConfiguration;
+use hapir_infra::rpc::RpcRegistry;
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
 use hapir_infra::ws::session_client::WsSessionClient;
@@ -282,10 +283,10 @@ pub async fn run_codex(
     let backend_for_perm = backend.clone();
     let sb_for_perm = session_base.clone();
     ws_client
-        .register_rpc("permission", move |params| {
+        .register("permission", move |params| {
             let b = backend_for_perm.clone();
             let sb = sb_for_perm.clone();
-            Box::pin(async move {
+            async move {
                 debug!("[runCodex] permission RPC received: {:?}", params);
 
                 let id = params
@@ -364,7 +365,7 @@ pub async fn run_codex(
                     .await;
 
                 serde_json::json!({"ok": true})
-            })
+            }
         })
         .await;
 
