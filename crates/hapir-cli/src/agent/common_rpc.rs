@@ -158,7 +158,13 @@ async fn register_set_session_config<Mode: Clone + Send + 'static>(
             let mut m = mode.lock().await;
             apply(&mut m, &params);
             debug!("[{log_tag}] set-session-config applied");
-            serde_json::json!({"ok": true})
+            serde_json::json!({
+                "ok": true,
+                "applied": {
+                    "permissionMode": params.get("permissionMode"),
+                    "modelMode": params.get("modelMode"),
+                }
+            })
         }
     })
     .await;
