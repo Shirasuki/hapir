@@ -128,7 +128,7 @@ enum RunnerAction {
 }
 
 fn build_cli() -> clap::Command {
-    let (about, subs) = hapir_shared::i18n::cli_about_strings();
+    let (about, subs) = hapir_shared::cli::i18n::cli_about_strings();
     let mut cmd = Cli::command().about(about);
     for sub in subs {
         cmd = cmd.mut_subcommand(sub.name, |c| {

@@ -14,19 +14,20 @@ use crate::store::Store;
 use crate::store::types::StoredMessage;
 pub use crate::store::types::VersionedUpdateResult;
 use event_publisher::EventPublisher;
-use hapir_shared::modes::{ModelMode, PermissionMode};
-use hapir_shared::rpc::bash::RpcCommandResponse;
-use hapir_shared::rpc::directories::RpcListDirectoryResponse;
-use hapir_shared::rpc::files::RpcReadFileResponse;
-use hapir_shared::rpc::uploads::{RpcDeleteUploadResponse, RpcUploadFileResponse};
-use hapir_shared::schemas::{
-    AttachmentMetadata, DecryptedMessage, HapirMachineMetadata, Session, SyncEvent,
-};
+use hapir_shared::common::machine::HapirMachineMetadata;
+use hapir_shared::common::message::{AttachmentMetadata, DecryptedMessage};
+use hapir_shared::common::modes::{AgentFlavor, ModelMode, PermissionMode};
+use hapir_shared::common::session::Session;
+use hapir_shared::common::sync_event::SyncEvent;
+use hapir_shared::frontend::rpc::bash::RpcCommandResponse;
+use hapir_shared::frontend::rpc::directories::RpcListDirectoryResponse;
+use hapir_shared::frontend::rpc::files::RpcReadFileResponse;
+use hapir_shared::frontend::rpc::uploads::{RpcDeleteUploadResponse, RpcUploadFileResponse};
 use machine_cache::{Machine, MachineCache};
 use message_service::{MessageService, MessagesPageResult};
 use rpc_gateway::{RpcGateway, RpcTransport};
 use serde_json::Value;
-use session_cache::SessionCache;
+use session_cache::{SessionAccessError, SessionCache};
 use sse_manager::{SseManager, SseMessage, SseSubscription};
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing::{debug, warn};
@@ -69,8 +70,6 @@ impl SyncEngine {
     pub fn subscribe(&self) -> broadcast::Receiver<SyncEvent> {
         self.publisher.subscribe()
     }
-
-    // --- SSE delegate methods ---
 
     pub fn subscribe_sse(
         &self,
@@ -118,8 +117,6 @@ impl SyncEngine {
     pub fn heartbeat_ms(&self) -> u64 {
         self.publisher.heartbeat_ms()
     }
-
-    // --- Session accessors ---
 
     pub async fn get_sessions(&self) -> Vec<Session> {
         self.session_cache.read().await.get_sessions()
@@ -174,17 +171,13 @@ impl SyncEngine {
         &self,
         session_id: &str,
         namespace: &str,
-    ) -> Result<(String, Session), &'static str> {
+    ) -> Result<(String, Session), SessionAccessError> {
         self.session_cache.write().await.resolve_session_access(
             session_id,
             namespace,
             &self.store,
             &self.publisher,
         )
-    }
-
-    pub async fn get_active_sessions(&self) -> Vec<Session> {
-        self.session_cache.read().await.get_active_sessions()
     }
 
     pub async fn get_or_create_session(
@@ -203,8 +196,6 @@ impl SyncEngine {
             &self.publisher,
         )
     }
-
-    // --- Machine accessors ---
 
     pub async fn get_machines(&self) -> Vec<Machine> {
         self.machine_cache.read().await.get_machines()
@@ -328,6 +319,7 @@ impl SyncEngine {
         &self,
         session_id: &str,
         namespace: &str,
+        flavor: Option<AgentFlavor>,
         content: &Value,
         local_id: Option<&str>,
     ) -> anyhow::Result<StoredMessage> {
@@ -336,6 +328,7 @@ impl SyncEngine {
             &self.publisher,
             session_id,
             namespace,
+            flavor,
             content,
             local_id,
         )
@@ -519,7 +512,7 @@ impl SyncEngine {
         mode: Option<PermissionMode>,
         allow_tools: Option<Vec<String>>,
         decision: Option<&str>,
-        answers: Option<hapir_shared::schemas::AnswersFormat>,
+        answers: Option<hapir_shared::common::agent_state::AnswersFormat>,
     ) -> anyhow::Result<()> {
         self.rpc_gateway
             .approve_permission(session_id, request_id, mode, allow_tools, decision, answers)
@@ -548,10 +541,7 @@ impl SyncEngine {
         if let Err(e) = self.rpc_gateway.kill_session(session_id).await {
             debug!(session_id, error = %e, "killSession RPC failed (proceeding with archive)");
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
+        let now = hapir_shared::common::utils::now_millis();
         self.handle_session_end(session_id, now).await;
         Ok(())
     }
@@ -570,10 +560,12 @@ impl SyncEngine {
     }
 
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<()> {
-        self.session_cache
-            .write()
-            .await
-            .delete_session(session_id, &self.store, &self.publisher)
+        self.session_cache.write().await.delete_session(
+            session_id,
+            &self.store,
+            &self.publisher,
+            false,
+        )
     }
 
     /// Apply session config: RPC (no lock) → then update cache
@@ -757,13 +749,13 @@ impl SyncEngine {
             );
             match access {
                 Ok(pair) => pair,
-                Err("access-denied") => {
+                Err(SessionAccessError::AccessDenied) => {
                     return ResumeSessionResult::Error {
                         message: "Session access denied".into(),
                         code: ResumeSessionErrorCode::AccessDenied,
                     };
                 }
-                Err(_) => {
+                Err(SessionAccessError::NotFound) => {
                     return ResumeSessionResult::Error {
                         message: "Session not found".into(),
                         code: ResumeSessionErrorCode::SessionNotFound,
@@ -788,18 +780,13 @@ impl SyncEngine {
             }
         };
 
-        let flavor = match metadata.flavor.as_deref() {
-            Some("codex") => "codex",
-            Some("gemini") => "gemini",
-            Some("opencode") => "opencode",
-            _ => "claude",
-        };
+        let flavor = metadata.flavor.unwrap_or(AgentFlavor::Claude);
 
         let resume_token = match flavor {
-            "codex" => metadata.codex_session_id.as_deref(),
-            "gemini" => metadata.gemini_session_id.as_deref(),
-            "opencode" => metadata.opencode_session_id.as_deref(),
-            _ => metadata.claude_session_id.as_deref(),
+            AgentFlavor::Codex => metadata.codex_session_id.as_deref(),
+            AgentFlavor::Gemini => metadata.gemini_session_id.as_deref(),
+            AgentFlavor::Opencode => metadata.opencode_session_id.as_deref(),
+            AgentFlavor::Claude => metadata.claude_session_id.as_deref(),
         };
 
         let resume_token = resume_token.map(|t| t.to_string());
@@ -807,7 +794,7 @@ impl SyncEngine {
         tracing::info!(
             session_id = %original_id,
             ?resume_token,
-            flavor = flavor,
+            flavor = flavor.as_str(),
             "[resumeSession] extracted resume token from metadata"
         );
 
@@ -850,7 +837,7 @@ impl SyncEngine {
             .spawn_session(
                 &target.id,
                 &metadata.path,
-                flavor,
+                flavor.as_str(),
                 None,
                 None,
                 None,

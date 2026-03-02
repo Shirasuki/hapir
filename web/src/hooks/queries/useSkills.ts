@@ -48,7 +48,7 @@ export function useSkills(
     })
 
     const skills = useMemo(() => {
-        if (query.data?.success && query.data.skills) {
+        if (query.data?.ok && query.data.skills) {
             return query.data.skills
         }
         return []

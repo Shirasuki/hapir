@@ -67,10 +67,7 @@ pub fn validate_telegram_init_data(
         Err(_) => return TelegramInitDataValidation::Err("auth_date is not a valid number".into()),
     };
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = hapir_shared::common::utils::now_secs();
 
     if now.saturating_sub(auth_date) > max_age_seconds {
         return TelegramInitDataValidation::Err("init data has expired".into());
@@ -241,10 +238,7 @@ mod tests {
     }
 
     fn current_timestamp() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
+        hapir_shared::common::utils::now_secs()
     }
 
     #[test]

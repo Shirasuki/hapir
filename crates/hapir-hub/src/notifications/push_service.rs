@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::VapidKeys;
 use crate::store::Store;
@@ -185,10 +184,7 @@ impl PushService {
     /// Build a VAPID JWT signed with ES256 for the given endpoint.
     fn build_vapid_jwt(&self, endpoint: &str) -> Result<String, PushError> {
         let origin = extract_origin(endpoint)?;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = hapir_shared::common::utils::now_secs();
 
         let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","alg":"ES256"}"#);
         let claims = serde_json::json!({

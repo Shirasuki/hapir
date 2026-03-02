@@ -2,7 +2,8 @@
 import type { ConnectionChangedData } from "./ConnectionChangedData";
 import type { DecryptedMessage } from "./DecryptedMessage";
 import type { MessageDeltaData } from "./MessageDeltaData";
+import type { Session } from "./Session";
 import type { ToastData } from "./ToastData";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type SyncEvent = { "type": "session-added", sessionId: string, namespace: string | null, data: JsonValue | null, } | { "type": "session-updated", sessionId: string, namespace: string | null, data: JsonValue | null, } | { "type": "session-removed", sessionId: string, namespace: string | null, } | { "type": "message-received", sessionId: string, namespace: string | null, message: DecryptedMessage, } | { "type": "message-delta", sessionId: string, namespace: string | null, delta: MessageDeltaData, } | { "type": "machine-updated", machineId: string, namespace: string | null, data: JsonValue | null, } | { "type": "toast", namespace: string | null, data: ToastData, } | { "type": "connection-changed", namespace: string | null, data: ConnectionChangedData | null, };
+export type SyncEvent = { "type": "session-added", sessionId: string, namespace: string | null, data: Session | null, } | { "type": "session-updated", sessionId: string, namespace: string | null, data: Session | null, } | { "type": "session-removed", sessionId: string, namespace: string | null, } | { "type": "message-received", sessionId: string, namespace: string | null, message: DecryptedMessage, } | { "type": "message-delta", sessionId: string, namespace: string | null, delta: MessageDeltaData, } | { "type": "machine-updated", machineId: string, namespace: string | null, data: JsonValue | null, } | { "type": "toast", namespace: string | null, data: ToastData, } | { "type": "connection-changed", namespace: string | null, data: ConnectionChangedData | null, };

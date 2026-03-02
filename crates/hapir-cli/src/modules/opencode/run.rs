@@ -3,8 +3,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 
-use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
-use hapir_shared::schemas::SessionStartedBy;
+use hapir_shared::common::modes::{AgentFlavor, PermissionMode, SessionMode};
+use hapir_shared::common::metadata::SessionStartedBy;
 
 use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
 use crate::agent::common_rpc::{ApplyConfigFn, CommonRpc, CommonRpcConfig, OnKillFn};
@@ -17,10 +17,10 @@ use hapir_infra::rpc::{EventRegistry, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::restore_terminal_state;
 
-use super::{OpencodeMode, compute_mode_hash};
 use super::local_launcher::opencode_local_launcher;
 use super::remote_launcher::opencode_remote_launcher;
 use super::session::OpencodeSession;
+use super::{OpencodeMode, compute_mode_hash};
 use crate::terminal::{TerminalManager, TerminalManagerOptions};
 
 pub struct OpencodeStartOptions {
@@ -93,15 +93,14 @@ pub async fn run_opencode(
         None,
     ));
 
-    let apply_config: Arc<ApplyConfigFn<OpencodeMode>> =
-        Arc::new(Box::new(|m, params| {
-            if let Some(pm) = params.get("permissionMode") {
-                if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
-                    debug!("[runOpenCode] Permission mode changed to: {:?}", mode);
-                    m.permission_mode = Some(mode);
-                }
+    let apply_config: Arc<ApplyConfigFn<OpencodeMode>> = Arc::new(Box::new(|m, params| {
+        if let Some(pm) = params.get("permissionMode") {
+            if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
+                debug!("[runOpenCode] Permission mode changed to: {:?}", mode);
+                m.permission_mode = Some(mode);
             }
-        }));
+        }
+    }));
 
     let backend_for_kill = backend.clone();
     let on_kill: OnKillFn = Arc::new(move || {

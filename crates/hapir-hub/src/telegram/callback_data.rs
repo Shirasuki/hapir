@@ -1,4 +1,4 @@
-use hapir_shared::schemas::Session;
+use hapir_shared::common::session::Session;
 
 use crate::notifications::session_naming::get_session_name as shared_get_session_name;
 

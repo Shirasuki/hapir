@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use hapir_shared::schemas::SyncEvent;
+use hapir_shared::common::sync_event::SyncEvent;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{error, trace, warn};
@@ -117,7 +117,7 @@ impl NotificationHub {
 
     async fn check_for_permission_notification(
         &self,
-        session: &hapir_shared::schemas::Session,
+        session: &hapir_shared::common::session::Session,
         sync_engine: &Arc<SyncEngine>,
     ) {
         let requests = match session
@@ -209,10 +209,7 @@ impl NotificationHub {
         }
 
         // Throttle: check cooldown
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
+        let now = hapir_shared::common::utils::now_millis();
 
         {
             let mut state = self.state.lock().await;

@@ -4,10 +4,10 @@ use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 use tokio::select;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, info, warn};
 
-use hapir_shared::session::{
+use hapir_shared::common::session_messages::{
     AgentContent, ClaudeMessageBody, ClaudeOutputData, RoleWrappedMessage,
 };
 
@@ -428,7 +428,7 @@ pub async fn claude_remote_launcher(
                             .iter()
                             .any(|b| b.get("type").and_then(|v| v.as_str()) != Some("thinking"));
 
-                        if has_content || !is_error {
+                        if has_content && !is_error {
                             session
                                 .base
                                 .ws_client
@@ -524,8 +524,7 @@ pub async fn claude_remote_launcher(
                     tool_use_to_request_id.insert(permission_key.clone(), request_id.clone());
 
                     // 创建 oneshot channel 接收响应
-                    let (tx, rx) =
-                        oneshot::channel::<(bool, Option<Value>)>();
+                    let (tx, rx) = oneshot::channel::<(bool, Option<Value>)>();
                     session
                         .pending_permissions
                         .lock()
@@ -536,10 +535,7 @@ pub async fn claude_remote_launcher(
                     let key_for_state = permission_key.clone();
                     let tool_name_for_state = tool_name.clone();
                     let tool_input_for_state = tool_input.clone();
-                    let requested_at = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as f64;
+                    let requested_at = hapir_shared::common::utils::now_millis() as f64;
 
                     let _ = session
                         .base

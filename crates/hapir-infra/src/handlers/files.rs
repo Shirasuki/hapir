@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
-use hapir_shared::rpc::files::{
+use hapir_shared::frontend::rpc::files::{
     RpcReadFileRequest, RpcReadFileResponse, RpcWriteFileRequest, RpcWriteFileResponse,
 };
 
@@ -44,7 +44,7 @@ pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
                 match tokio::fs::read(&resolved).await {
                     Ok(bytes) => {
                         let content = BASE64.encode(&bytes);
-                        response.success = true;
+                        response.ok = true;
                         response.content = Some(content);
                         response.error = None;
                         serde_json::to_value(response).unwrap()
@@ -140,7 +140,7 @@ pub async fn register_file_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
                         let mut hasher = Sha256::new();
                         hasher.update(&bytes);
                         let hash = hex::encode(hasher.finalize());
-                        response.success = true;
+                        response.ok = true;
                         response.hash = Some(hash);
                         response.error = None;
                         serde_json::to_value(response).unwrap()

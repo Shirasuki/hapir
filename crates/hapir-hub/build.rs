@@ -4,9 +4,20 @@ use std::process::Command;
 
 use ts_rs::{Config, TS};
 
-use hapir_shared::modes::*;
-use hapir_shared::schemas::*;
-use hapir_shared::session::*;
+use hapir_shared::common::agent_state::*;
+use hapir_shared::common::message::*;
+use hapir_shared::common::metadata::*;
+use hapir_shared::common::modes::*;
+use hapir_shared::common::session::*;
+use hapir_shared::common::summary::*;
+use hapir_shared::common::sync_event::*;
+use hapir_shared::common::todo::*;
+use hapir_shared::frontend::rpc::bash::*;
+use hapir_shared::frontend::rpc::directories::*;
+use hapir_shared::frontend::rpc::files::*;
+use hapir_shared::frontend::rpc::skills::*;
+use hapir_shared::frontend::rpc::slash_commands::*;
+use hapir_shared::frontend::rpc::uploads::*;
 
 fn watch_recursive(dir: &Path) {
     for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -74,6 +85,19 @@ fn generate_ts_types(types_dir: &Path) {
         TodoProgress,
         SessionSummaryMetadata,
         SessionSummary,
+        RpcCommandResponse,
+        RpcReadFileResponse,
+        RpcWriteFileResponse,
+        RpcDirectoryEntry,
+        RpcListDirectoryResponse,
+        RpcTreeNode,
+        RpcGetDirectoryTreeResponse,
+        RpcUploadFileResponse,
+        RpcDeleteUploadResponse,
+        RpcSkillSummary,
+        RpcListSkillsResponse,
+        RpcSlashCommand,
+        RpcListSlashCommandsResponse,
     );
 
     // Only write if content changed to avoid unnecessary rebuilds

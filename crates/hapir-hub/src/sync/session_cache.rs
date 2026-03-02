@@ -1,24 +1,45 @@
-use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use hapir_shared::modes::{ModelMode, PermissionMode};
-use hapir_shared::schemas::{AgentState, HapirSessionMetadata, Session, SyncEvent, TodoItem};
-use serde_json::Value;
-
 use super::alive_time::clamp_alive_time;
 use super::event_publisher::EventPublisher;
 use super::todo_extraction::extract_todos_from_message_content;
 use crate::store::Store;
 use crate::store::types::VersionedUpdateResult;
+use anyhow::anyhow;
+use hapir_shared::cli::socket::SocketErrorReason;
+use hapir_shared::common::modes::{ModelMode, PermissionMode};
+use hapir_shared::common::session::Session;
+use hapir_shared::common::sync_event::SyncEvent;
+use hapir_shared::common::utils::now_millis;
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+use tracing::{debug, info};
 
-const SESSION_TIMEOUT_MS: i64 = 30_000;
+/// Max messages to scan when backfilling todos from history.
+/// Override via `HAPIR_TODO_BACKFILL_LIMIT` env var.
+static TODO_BACKFILL_LIMIT: LazyLock<i64> = LazyLock::new(|| {
+    std::env::var("HAPIR_TODO_BACKFILL_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200)
+});
 
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionAccessError {
+    NotFound,
+    AccessDenied,
 }
+
+impl From<SessionAccessError> for SocketErrorReason {
+    fn from(e: SessionAccessError) -> Self {
+        match e {
+            SessionAccessError::NotFound => SocketErrorReason::NotFound,
+            SessionAccessError::AccessDenied => SocketErrorReason::AccessDenied,
+        }
+    }
+}
+
+/// Sessions are considered inactive after 30s without a heartbeat.
+const SESSION_TIMEOUT_MS: i64 = 30_000;
 
 pub struct SessionCache {
     sessions: HashMap<String, Session>,
@@ -32,6 +53,25 @@ impl SessionCache {
             sessions: HashMap::new(),
             last_broadcast_at: HashMap::new(),
             todo_backfill_attempted: HashSet::new(),
+        }
+    }
+
+    /// Removes a session from cache and emits SessionRemoved. Does not touch DB.
+    fn evict(&mut self, session_id: &str, publisher: &EventPublisher) -> Option<Session> {
+        let removed = self.sessions.remove(session_id)?;
+        self.last_broadcast_at.remove(session_id);
+        self.todo_backfill_attempted.remove(session_id);
+        publisher.emit(SyncEvent::SessionRemoved {
+            session_id: session_id.to_string(),
+            namespace: Some(removed.namespace.clone()),
+        });
+        Some(removed)
+    }
+
+    /// Ensures a session is in cache, loading from DB if needed.
+    fn ensure_cached(&mut self, session_id: &str, store: &Store, publisher: &EventPublisher) {
+        if !self.sessions.contains_key(session_id) {
+            self.refresh_session(session_id, store, publisher);
         }
     }
 
@@ -57,13 +97,16 @@ impl SessionCache {
             .filter(|s| s.namespace == namespace)
     }
 
+    /// Checks namespace access, falls back to DB if not cached.
+    ///
+    /// Returns `(session_id, Session)` or an access error.
     pub fn resolve_session_access(
         &mut self,
         session_id: &str,
         namespace: &str,
         store: &Store,
         publisher: &EventPublisher,
-    ) -> Result<(String, Session), &'static str> {
+    ) -> Result<(String, Session), SessionAccessError> {
         let session = self
             .sessions
             .get(session_id)
@@ -71,9 +114,9 @@ impl SessionCache {
             .or_else(|| self.refresh_session(session_id, store, publisher));
 
         match session {
-            Some(s) if s.namespace != namespace => Err("access-denied"),
+            Some(s) if s.namespace != namespace => Err(SessionAccessError::AccessDenied),
             Some(s) => Ok((session_id.to_string(), s)),
-            None => Err("not-found"),
+            None => Err(SessionAccessError::NotFound),
         }
     }
 
@@ -85,6 +128,7 @@ impl SessionCache {
             .collect()
     }
 
+    /// Finds or creates a session by tag + namespace, persists to DB and refreshes cache.
     pub fn get_or_create_session(
         &mut self,
         tag: &str,
@@ -98,9 +142,13 @@ impl SessionCache {
         let stored =
             sessions::get_or_create_session(&store.conn(), tag, metadata, agent_state, namespace)?;
         self.refresh_session(&stored.id, store, publisher)
-            .ok_or_else(|| anyhow::anyhow!("failed to load session"))
+            .ok_or_else(|| anyhow!("failed to load session"))
     }
 
+    /// Reloads a session from DB into cache, emitting Added/Updated/Removed events.
+    ///
+    /// On first load, attempts to backfill todos from message history (once per session).
+    /// Runtime state (active/thinking) is preserved from cache, not overwritten by DB.
     pub fn refresh_session(
         &mut self,
         session_id: &str,
@@ -112,27 +160,23 @@ impl SessionCache {
         let mut stored = match sessions::get_session(&store.conn(), session_id) {
             Some(s) => s,
             None => {
-                if let Some(removed) = self.sessions.remove(session_id) {
-                    self.last_broadcast_at.remove(session_id);
-                    self.todo_backfill_attempted.remove(session_id);
-                    publisher.emit(SyncEvent::SessionRemoved {
-                        session_id: session_id.to_string(),
-                        namespace: Some(removed.namespace),
-                    });
-                }
+                // DB deleted — clean up stale cache entry and notify frontend
+                self.evict(session_id, publisher);
                 return None;
             }
         };
 
         let existing = self.sessions.get(session_id);
 
-        // Todo backfill: scan messages for TodoWrite if todos are null
+        // To-do backfill: scan messages for TodoWrite if todos are null
         if stored.todos.is_none() && !self.todo_backfill_attempted.contains(session_id) {
             self.todo_backfill_attempted.insert(session_id.to_string());
-            let msgs = messages::get_messages(&store.conn(), session_id, 200, None);
+            let flavor = stored.metadata.as_ref().and_then(|m| m.flavor);
+            let msgs =
+                messages::get_messages(&store.conn(), session_id, *TODO_BACKFILL_LIMIT, None);
             for msg in msgs.iter().rev() {
                 if let Some(content) = &msg.content
-                    && let Some(todos) = extract_todos_from_message_content(content)
+                    && let Some(todos) = extract_todos_from_message_content(content, flavor)
                 {
                     let todos_value = serde_json::to_value(&todos).ok();
                     if let Some(tv) = &todos_value
@@ -154,24 +198,9 @@ impl SessionCache {
             }
         }
 
-        // Parse metadata
-        let metadata: Option<HapirSessionMetadata> = stored
-            .metadata
-            .as_ref()
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-        // Parse agent state
-        let agent_state: Option<AgentState> = stored
-            .agent_state
-            .as_ref()
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-        // Parse todos
-        let todos: Option<Vec<TodoItem>> = stored
-            .todos
-            .as_ref()
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-
+        let metadata = stored.metadata.clone();
+        let agent_state = stored.agent_state.clone();
+        let todos = stored.todos.clone();
         let is_update = existing.is_some();
 
         let session = Session {
@@ -199,26 +228,24 @@ impl SessionCache {
         self.sessions
             .insert(session_id.to_string(), session.clone());
 
-        let event_data = serde_json::to_value(&session).ok();
         if is_update {
             publisher.emit(SyncEvent::SessionUpdated {
                 session_id: session_id.to_string(),
                 namespace: Some(session.namespace.clone()),
-                data: event_data,
+                data: Some(session.clone()),
             });
         } else {
             publisher.emit(SyncEvent::SessionAdded {
                 session_id: session_id.to_string(),
                 namespace: Some(session.namespace.clone()),
-                data: event_data,
+                data: Some(session.clone()),
             });
         }
 
         Some(session)
     }
 
-    // PLACEHOLDER_SESSION_CACHE_PART2
-
+    /// Optimistic-concurrency metadata update; refreshes cache on success.
     pub fn update_metadata(
         &mut self,
         session_id: &str,
@@ -246,6 +273,7 @@ impl SessionCache {
         result
     }
 
+    /// Optimistic-concurrency agent_state update; refreshes cache on success.
     pub fn update_agent_state(
         &mut self,
         session_id: &str,
@@ -272,6 +300,7 @@ impl SessionCache {
         result
     }
 
+    /// Full reload of all sessions from DB into cache. Called at startup.
     pub fn reload_all(&mut self, store: &Store, publisher: &EventPublisher) {
         use crate::store::sessions;
         let all = sessions::get_sessions(&store.conn());
@@ -280,6 +309,9 @@ impl SessionCache {
         }
     }
 
+    /// Processes a CLI heartbeat, updating active/thinking/mode runtime state.
+    ///
+    /// Only broadcasts when state actually changes or >10s since last broadcast.
     pub fn handle_session_alive(
         &mut self,
         sid: &str,
@@ -296,12 +328,13 @@ impl SessionCache {
             None => return,
         };
 
-        if !self.sessions.contains_key(sid) {
-            self.refresh_session(sid, store, publisher);
-        }
+        self.ensure_cached(sid, store, publisher);
         let session = match self.sessions.get_mut(sid) {
             Some(s) => s,
-            None => return,
+            None => {
+                tracing::warn!(session_id = %sid, "session not found after ensure_cached");
+                return;
+            }
         };
 
         let was_active = session.active;
@@ -334,21 +367,15 @@ impl SessionCache {
 
         if should_broadcast {
             self.last_broadcast_at.insert(sid.to_string(), now);
-            let data = serde_json::json!({
-                "activeAt": session.active_at,
-                "thinking": session.thinking,
-                "thinkingStatus": session.thinking_status,
-                "permissionMode": session.permission_mode,
-                "modelMode": session.model_mode,
-            });
             publisher.emit(SyncEvent::SessionUpdated {
                 session_id: sid.to_string(),
                 namespace: Some(session.namespace.clone()),
-                data: Some(data),
+                data: Some(session.clone()),
             });
         }
     }
 
+    /// Called on CLI disconnect or session end; clears active/thinking state.
     pub fn handle_session_end(
         &mut self,
         sid: &str,
@@ -358,12 +385,13 @@ impl SessionCache {
     ) {
         let t = clamp_alive_time(time).unwrap_or_else(now_millis);
 
-        if !self.sessions.contains_key(sid) {
-            self.refresh_session(sid, store, publisher);
-        }
+        self.ensure_cached(sid, store, publisher);
         let session = match self.sessions.get_mut(sid) {
             Some(s) => s,
-            None => return,
+            None => {
+                tracing::warn!(session_id = %sid, "session not found after ensure_cached");
+                return;
+            }
         };
 
         if !session.active && !session.thinking {
@@ -378,10 +406,11 @@ impl SessionCache {
         publisher.emit(SyncEvent::SessionUpdated {
             session_id: sid.to_string(),
             namespace: Some(session.namespace.clone()),
-            data: Some(serde_json::json!({"active": false, "thinking": false})),
+            data: Some(session.clone()),
         });
     }
 
+    /// Marks sessions inactive if no heartbeat received within `SESSION_TIMEOUT_MS`.
     pub fn expire_inactive(&mut self, publisher: &EventPublisher) {
         let now = now_millis();
         let expired: Vec<String> = self
@@ -392,23 +421,24 @@ impl SessionCache {
             .collect();
 
         if !expired.is_empty() {
-            tracing::info!(count = expired.len(), "expiring inactive sessions");
+            info!(count = expired.len(), "expiring inactive sessions");
         }
         for id in expired {
             if let Some(session) = self.sessions.get_mut(&id) {
-                tracing::debug!(session_id = %id, "session expired due to inactivity");
+                debug!(session_id = %id, "session expired due to inactivity");
                 session.active = false;
                 session.thinking = false;
                 session.thinking_status = None;
                 publisher.emit(SyncEvent::SessionUpdated {
                     session_id: id,
                     namespace: Some(session.namespace.clone()),
-                    data: Some(serde_json::json!({"active": false})),
+                    data: Some(session.clone()),
                 });
             }
         }
     }
 
+    /// Applies permission_mode / model_mode from the web UI, broadcasts immediately.
     pub fn apply_session_config(
         &mut self,
         session_id: &str,
@@ -417,12 +447,13 @@ impl SessionCache {
         store: &Store,
         publisher: &EventPublisher,
     ) {
-        if !self.sessions.contains_key(session_id) {
-            self.refresh_session(session_id, store, publisher);
-        }
+        self.ensure_cached(session_id, store, publisher);
         let session = match self.sessions.get_mut(session_id) {
             Some(s) => s,
-            None => return,
+            None => {
+                tracing::warn!(session_id = %session_id, "session not found after ensure_cached");
+                return;
+            }
         };
 
         if let Some(pm) = permission_mode {
@@ -432,14 +463,14 @@ impl SessionCache {
             session.model_mode = Some(mm);
         }
 
-        let data = serde_json::to_value(&*session).ok();
         publisher.emit(SyncEvent::SessionUpdated {
             session_id: session_id.to_string(),
             namespace: Some(session.namespace.clone()),
-            data,
+            data: Some(session.clone()),
         });
     }
 
+    /// Updates metadata.name (optimistic concurrency) without touching updated_at.
     pub fn rename_session(
         &mut self,
         session_id: &str,
@@ -452,41 +483,12 @@ impl SessionCache {
         let session = self
             .sessions
             .get(session_id)
-            .ok_or_else(|| anyhow::anyhow!("session not found"))?;
+            .ok_or_else(|| anyhow!("session not found"))?;
 
-        let current_meta = session
+        let mut new_meta = session
             .metadata
             .clone()
-            .unwrap_or_else(|| HapirSessionMetadata {
-                path: String::new(),
-                host: String::new(),
-                version: None,
-                name: None,
-                os: None,
-                summary: None,
-                machine_id: None,
-                claude_session_id: None,
-                codex_session_id: None,
-                gemini_session_id: None,
-                opencode_session_id: None,
-                tools: None,
-                slash_commands: None,
-                home_dir: None,
-                happy_home_dir: None,
-                happy_lib_dir: None,
-                happy_tools_dir: None,
-                started_from_runner: None,
-                host_pid: None,
-                started_by: None,
-                lifecycle_state: None,
-                lifecycle_state_since: None,
-                archived_by: None,
-                archive_reason: None,
-                flavor: None,
-                worktree: None,
-            });
-
-        let mut new_meta = current_meta;
+            .ok_or_else(|| anyhow!("session has no metadata"))?;
         new_meta.name = Some(name.to_string());
         let new_meta_value = serde_json::to_value(&new_meta)?;
 
@@ -509,51 +511,48 @@ impl SessionCache {
                 Ok(())
             }
             VersionedUpdateResult::VersionMismatch { .. } => {
-                Err(anyhow::anyhow!("session was modified concurrently"))
+                Err(anyhow!("session was modified concurrently"))
             }
-            VersionedUpdateResult::Error => {
-                Err(anyhow::anyhow!("failed to update session metadata"))
-            }
+            VersionedUpdateResult::Error => Err(anyhow!("failed to update session metadata")),
         }
     }
 
-    // PLACEHOLDER_SESSION_CACHE_PART3
-
+    /// Deletes an inactive session, cleaning up cache and emitting SessionRemoved.
+    ///
+    /// Returns an error if the session is still active (unless `force` is true).
     pub fn delete_session(
         &mut self,
         session_id: &str,
         store: &Store,
         publisher: &EventPublisher,
+        force: bool,
     ) -> anyhow::Result<()> {
         use crate::store::sessions;
 
         let session = self
             .sessions
             .get(session_id)
-            .ok_or_else(|| anyhow::anyhow!("session not found"))?;
+            .ok_or_else(|| anyhow!("session not found"))?;
 
-        if session.active {
-            return Err(anyhow::anyhow!("cannot delete active session"));
+        if !force && session.active {
+            return Err(anyhow!("cannot delete active session"));
         }
 
         let namespace = session.namespace.clone();
 
         if !sessions::delete_session(&store.conn(), session_id, &namespace) {
-            return Err(anyhow::anyhow!("failed to delete session"));
+            return Err(anyhow!("failed to delete session"));
         }
 
-        self.sessions.remove(session_id);
-        self.last_broadcast_at.remove(session_id);
-        self.todo_backfill_attempted.remove(session_id);
-
-        publisher.emit(SyncEvent::SessionRemoved {
-            session_id: session_id.to_string(),
-            namespace: Some(namespace),
-        });
+        self.evict(session_id, publisher);
 
         Ok(())
     }
 
+    /// Merges messages, metadata, and todos from an old session into a new one, then deletes the old.
+    ///
+    /// Used when a CLI reconnect creates a new session due to tag change.
+    /// Metadata merge preserves name/summary/worktree/path/host from old if missing in new.
     pub fn merge_sessions(
         &mut self,
         old_session_id: &str,
@@ -570,26 +569,30 @@ impl SessionCache {
 
         let old_stored =
             sessions::get_session_by_namespace(&store.conn(), old_session_id, namespace)
-                .ok_or_else(|| anyhow::anyhow!("old session not found"))?;
+                .ok_or_else(|| anyhow!("old session not found"))?;
         let new_stored =
             sessions::get_session_by_namespace(&store.conn(), new_session_id, namespace)
-                .ok_or_else(|| anyhow::anyhow!("new session not found"))?;
+                .ok_or_else(|| anyhow!("new session not found"))?;
 
         // Merge messages
-        let merge_result =
+        let (moved, old_max_seq, new_max_seq) =
             messages::merge_session_messages(&store.conn(), old_session_id, new_session_id)?;
-        tracing::info!(
+        info!(
             old_session_id = old_session_id,
             new_session_id = new_session_id,
-            moved = merge_result.0,
-            old_max_seq = merge_result.1,
-            new_max_seq = merge_result.2,
+            moved,
+            old_max_seq,
+            new_max_seq,
             "[mergeSessions] messages merged"
         );
 
         // Merge metadata
         if let (Some(old_meta), Some(new_meta)) = (&old_stored.metadata, &new_stored.metadata)
-            && let Some(merged) = merge_metadata(old_meta, new_meta)
+            && let (Ok(old_val), Ok(new_val)) = (
+                serde_json::to_value(old_meta),
+                serde_json::to_value(new_meta),
+            )
+            && let Some(merged) = merge_metadata(&old_val, &new_val)
         {
             // Try up to 2 times for optimistic concurrency
             for _ in 0..2 {
@@ -618,33 +621,23 @@ impl SessionCache {
         if old_stored.todos.is_some()
             && let Some(ts) = old_stored.todos_updated_at
         {
+            let todos_value = serde_json::to_value(&old_stored.todos).ok();
             sessions::set_session_todos(
                 &store.conn(),
                 new_session_id,
-                old_stored.todos.as_ref(),
+                todos_value.as_ref(),
                 ts,
                 namespace,
             );
         }
 
         // Delete old session
-        tracing::info!(
+        info!(
             old_session_id = old_session_id,
             new_session_id = new_session_id,
             "[mergeSessions] deleting old session"
         );
-        if !sessions::delete_session(&store.conn(), old_session_id, namespace) {
-            return Err(anyhow::anyhow!("failed to delete old session during merge"));
-        }
-
-        if self.sessions.remove(old_session_id).is_some() {
-            publisher.emit(SyncEvent::SessionRemoved {
-                session_id: old_session_id.to_string(),
-                namespace: Some(namespace.to_string()),
-            });
-        }
-        self.last_broadcast_at.remove(old_session_id);
-        self.todo_backfill_attempted.remove(old_session_id);
+        self.delete_session(old_session_id, store, publisher, true)?;
 
         self.refresh_session(new_session_id, store, publisher);
         Ok(())

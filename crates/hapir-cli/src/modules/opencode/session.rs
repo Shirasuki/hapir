@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use hapir_shared::cli::gateway::RpcCommonResponse;
 use tracing::debug;
 
 use crate::agent::session_base::AgentSessionBase;
@@ -34,7 +35,7 @@ impl RpcHandlerGroup<WsSessionClient> for OpencodeSession {
                         let _ = b.cancel_prompt(&sid).await;
                     }
                     sb.on_thinking_change(false).await;
-                    serde_json::json!({"ok": true})
+                    RpcCommonResponse::success()
                 }
             })
             .await;

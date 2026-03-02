@@ -1,16 +1,16 @@
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
     routing::{get, post},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
 
-use hapir_shared::schemas::AttachmentMetadata;
+use hapir_shared::common::message::AttachmentMetadata;
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
 
 use crate::web::AppState;
 use crate::web::middleware::auth::AuthContext;
+use crate::web::response_types::MessagesData;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -38,29 +38,12 @@ async fn list_messages(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     Query(query): Query<MessagesQuery>,
-) -> (StatusCode, Json<Value>) {
-    // Verify session access
-    let session_id = match state
+) -> Result<Json<ApiResponse<MessagesData>>, ApiError> {
+    let (session_id, _session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok((sid, _session)) => sid,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
-    // Clamp limit to 1..=200, default 50
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let before_seq = query.before_seq.filter(|&s| s >= 1);
 
@@ -68,10 +51,7 @@ async fn list_messages(
         .sync_engine
         .get_messages_page(&session_id, limit, before_seq);
 
-    (
-        StatusCode::OK,
-        Json(serde_json::to_value(result).unwrap_or(json!({}))),
-    )
+    Ok(Json(ApiResponse::ok(result)))
 }
 
 async fn create_message(
@@ -79,54 +59,30 @@ async fn create_message(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<SendMessageBody>>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<()>>, ApiError> {
     let Json(body) = match body {
         Some(b) => b,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid body" })),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
-    // Require text or attachments
     let has_text = !body.text.is_empty();
     let has_attachments = body.attachments.as_ref().is_some_and(|a| !a.is_empty());
 
     if !has_text && !has_attachments {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Message requires text or attachments" })),
-        );
+        return Err(ApiError::BadRequest(
+            "Message requires text or attachments".into(),
+        ));
     }
 
-    // Verify session access and require active
-    let (session_id, session) = match state
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
     let attachments_slice = body.attachments.as_deref();
@@ -143,10 +99,7 @@ async fn create_message(
         )
         .await
     {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(()) => Ok(Json(ApiResponse::success())),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }

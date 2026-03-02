@@ -3,7 +3,7 @@ use crate::agent::local_launch_policy::{
 };
 use crate::agent::loop_base::LoopResult;
 use crate::modules::claude::session::ClaudeSession;
-use hapir_shared::session::FlatMessage;
+use hapir_shared::common::session_messages::FlatMessage;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::process::Command;

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
-use hapir_shared::session::FlatMessage;
+use hapir_shared::common::session_messages::FlatMessage;
 
 use crate::agent::agent_message_convert::agent_message_to_flat;
 use crate::agent::loop_base::LoopResult;

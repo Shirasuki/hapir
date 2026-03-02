@@ -1,7 +1,9 @@
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{Json, Router, extract::State, routing::post};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::Deserialize;
-use serde_json::{Value, json};
+
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
+use hapir_shared::frontend::response_types::{AuthData, AuthUser};
 
 use crate::config::cli_api_token::{constant_time_eq, parse_access_token};
 use crate::config::owner_id::get_or_create_owner_id;
@@ -25,95 +27,63 @@ pub fn router() -> Router<AppState> {
 async fn bind_handler(
     State(state): State<AppState>,
     Json(body): Json<BindBody>,
-) -> (StatusCode, Json<Value>) {
-    // Check that Telegram bot token is configured.
+) -> Result<Json<ApiResponse<AuthData>>, ApiError> {
     let bot_token = match &state.telegram_bot_token {
         Some(t) => t.clone(),
         None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"error": "Telegram bot not configured"})),
-            );
+            return Err(ApiError::ServiceUnavailable(
+                "Telegram bot not configured".into(),
+            ));
         }
     };
 
-    // Validate the Telegram init data.
     let validation = validate_telegram_init_data(&body.init_data, &bot_token, 300);
     let tg_user = match validation {
         TelegramInitDataValidation::Ok { user, .. } => user,
         TelegramInitDataValidation::Err(e) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": format!("Invalid init data: {e}")})),
-            );
+            return Err(ApiError::Unauthorized(format!("Invalid init data: {e}")));
         }
     };
 
-    // Parse the access token.
     let parsed = match parse_access_token(&body.access_token) {
         Some(p) => p,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid access token"})),
-            );
+            return Err(ApiError::Unauthorized("Invalid access token".into()));
         }
     };
 
-    // Verify the base token matches the CLI API token.
     if !constant_time_eq(&parsed.base_token, &state.cli_api_token) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Invalid access token"})),
-        );
+        return Err(ApiError::Unauthorized("Invalid access token".into()));
     }
 
     let namespace = parsed.namespace;
     let platform_user_id = tg_user.id.to_string();
 
-    // Get or create user in the store.
     let conn = state.store.conn();
     let existing_user = users::get_user(&conn, "telegram", &platform_user_id);
 
     if let Some(ref existing) = existing_user {
-        // Check if user is already bound to a different namespace.
         if existing.namespace != namespace {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({"error": "already_bound"})),
-            );
+            return Err(ApiError::Conflict("already_bound".into()));
         }
     }
 
-    // Create the user if it does not exist yet.
     if existing_user.is_none()
         && let Err(e) = users::add_user(&conn, "telegram", &platform_user_id, &namespace)
     {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("Failed to create user: {e}")})),
-        );
+        return Err(ApiError::Internal(format!("Failed to create user: {e}")));
     }
 
-    // Drop the connection guard before potentially blocking calls.
     drop(conn);
 
-    // Get or create the owner ID.
     let owner_id = match get_or_create_owner_id(&state.data_dir) {
         Ok(id) => id,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Failed to get owner ID: {e}")})),
-            );
+            return Err(ApiError::Internal(format!("Failed to get owner ID: {e}")));
         }
     };
 
-    // Issue JWT (HS256, 15 minute expiry).
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now = hapir_shared::common::utils::now_secs();
 
     let claims = JwtClaims {
         uid: owner_id,
@@ -125,21 +95,15 @@ async fn bind_handler(
     let key = EncodingKey::from_secret(&state.jwt_secret);
 
     match encode(&header, &claims, &key) {
-        Ok(token) => (
-            StatusCode::OK,
-            Json(json!({
-                "token": token,
-                "user": {
-                    "id": owner_id,
-                    "username": tg_user.username,
-                    "firstName": tg_user.first_name,
-                    "lastName": tg_user.last_name,
-                }
-            })),
-        ),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Failed to create token"})),
-        ),
+        Ok(token) => Ok(Json(ApiResponse::ok(AuthData {
+            token,
+            user: AuthUser {
+                id: owner_id,
+                username: tg_user.username,
+                first_name: tg_user.first_name,
+                last_name: tg_user.last_name,
+            },
+        }))),
+        Err(_) => Err(ApiError::Internal("Failed to create token".into())),
     }
 }

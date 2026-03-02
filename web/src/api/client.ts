@@ -29,18 +29,7 @@ type ApiClientOptions = {
     onUnauthorized?: () => Promise<string | null>
 }
 
-type ErrorPayload = {
-    error?: unknown
-}
-
-function parseErrorCode(bodyText: string): string | undefined {
-    try {
-        const parsed = JSON.parse(bodyText) as ErrorPayload
-        return typeof parsed.error === 'string' ? parsed.error : undefined
-    } catch {
-        return undefined
-    }
-}
+type ApiEnvelope<T> = { code: number; message: string; data: T }
 
 export class ApiError extends Error {
     status: number
@@ -103,23 +92,26 @@ export class ApiClient {
             headers
         })
 
-        if (res.status === 401) {
-            if (attempt === 0 && this.onUnauthorized) {
-                const refreshed = await this.onUnauthorized()
-                if (refreshed) {
-                    this.token = refreshed
-                    return await this.request<T>(path, init, attempt + 1, refreshed)
-                }
-            }
-            throw new Error('Session expired. Please sign in again.')
-        }
-
         if (!res.ok) {
+            if (res.status === 401) {
+                if (attempt === 0 && this.onUnauthorized) {
+                    const refreshed = await this.onUnauthorized()
+                    if (refreshed) {
+                        this.token = refreshed
+                        return await this.request<T>(path, init, attempt + 1, refreshed)
+                    }
+                }
+                throw new ApiError('Session expired. Please sign in again.', 401)
+            }
             const body = await res.text().catch(() => '')
-            throw new Error(`HTTP ${res.status} ${res.statusText}: ${body}`)
+            throw new ApiError(`HTTP ${res.status} ${res.statusText}: ${body}`, res.status)
         }
 
-        return await res.json() as T
+        const envelope = await res.json() as ApiEnvelope<T>
+        if (envelope.code !== 200) {
+            throw new ApiError(envelope.message, envelope.code)
+        }
+        return envelope.data
     }
 
     async authenticate(auth: { initData: string } | { accessToken: string }): Promise<AuthResponse> {
@@ -129,14 +121,11 @@ export class ApiClient {
             body: JSON.stringify(auth)
         })
 
-        if (!res.ok) {
-            const body = await res.text().catch(() => '')
-            const code = parseErrorCode(body)
-            const detail = body ? `: ${body}` : ''
-            throw new ApiError(`Auth failed: HTTP ${res.status} ${res.statusText}${detail}`, res.status, code, body || undefined)
+        const envelope = await res.json() as ApiEnvelope<AuthResponse>
+        if (envelope.code !== 200) {
+            throw new ApiError(envelope.message, envelope.code, undefined, JSON.stringify(envelope))
         }
-
-        return await res.json() as AuthResponse
+        return envelope.data
     }
 
     async bind(auth: { initData: string; accessToken: string }): Promise<AuthResponse> {
@@ -146,14 +135,11 @@ export class ApiClient {
             body: JSON.stringify(auth)
         })
 
-        if (!res.ok) {
-            const body = await res.text().catch(() => '')
-            const code = parseErrorCode(body)
-            const detail = body ? `: ${body}` : ''
-            throw new ApiError(`Bind failed: HTTP ${res.status} ${res.statusText}${detail}`, res.status, code, body || undefined)
+        const envelope = await res.json() as ApiEnvelope<AuthResponse>
+        if (envelope.code !== 200) {
+            throw new ApiError(envelope.message, envelope.code, undefined, JSON.stringify(envelope))
         }
-
-        return await res.json() as AuthResponse
+        return envelope.data
     }
 
     async getSessions(): Promise<SessionsResponse> {
@@ -410,10 +396,8 @@ export class ApiClient {
     }
 
     async fetchVoiceToken(options?: { customAgentId?: string; customApiKey?: string }): Promise<{
-        allowed: boolean
-        token?: string
-        agentId?: string
-        error?: string
+        token: string
+        agentId: string
     }> {
         return await this.request('/api/voice/token', {
             method: 'POST',

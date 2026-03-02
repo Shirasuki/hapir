@@ -6,11 +6,11 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 use tracing::debug;
 
-use hapir_shared::modes::{ModelMode, PermissionMode, SessionMode};
+use hapir_shared::common::modes::{ModelMode, PermissionMode, SessionMode};
 
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::ws::session_client::WsSessionClient;
-use hapir_shared::schemas::HapirSessionMetadata;
+use hapir_shared::common::metadata::HapirSessionMetadata;
 
 /// Callback invoked when the mode changes.
 pub type ModeChangeCallback = Box<dyn Fn(SessionMode) + Send + Sync>;

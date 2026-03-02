@@ -1,19 +1,19 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
 
-use hapir_shared::schemas::SessionStartedBy;
+use hapir_shared::common::metadata::SessionStartedBy;
 
 use super::local_launcher::claude_local_launcher;
 use super::remote_launcher::claude_remote_launcher;
-use crate::agent::bootstrap::{bootstrap_agent, AgentBootstrapConfig};
+use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
 use crate::agent::common_rpc::{ApplyConfigFn, CommonRpc, CommonRpcConfig, MessagePreProcessor};
-use crate::agent::loop_base::{run_local_remote_session, LoopOptions};
+use crate::agent::loop_base::{LoopOptions, run_local_remote_session};
 use crate::agent::session_base::{AgentSessionBase, AgentSessionBaseOptions};
 use crate::modules::claude::hook_server::start_hook_server;
 use crate::modules::claude::session::ClaudeSession;
@@ -24,8 +24,8 @@ use hapir_infra::handlers::uploads;
 use hapir_infra::rpc::{EventRegistry, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::{restore_terminal_state, save_terminal_state};
-use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
-use hapir_shared::session::FlatMessage;
+use hapir_shared::common::modes::{AgentFlavor, PermissionMode, SessionMode};
+use hapir_shared::common::session_messages::FlatMessage;
 
 /// Options for starting a Claude session.
 #[derive(Debug, Clone)]

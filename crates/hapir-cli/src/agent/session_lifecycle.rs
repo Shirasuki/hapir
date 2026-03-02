@@ -1,11 +1,10 @@
-use hapir_shared::modes::SessionMode;
 use hapir_infra::utils::terminal::restore_terminal_state;
 use hapir_infra::ws::session_client::WsSessionClient;
+use hapir_shared::common::modes::SessionMode;
 use std::pin::Pin;
 use std::process;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 
@@ -63,10 +62,7 @@ impl AgentSessionLifecycle {
 
     async fn archive_and_close(&self) {
         let reason = self.archive_reason.lock().await.clone();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as f64;
+        let now = hapir_shared::common::utils::now_millis() as f64;
 
         let _ = self
             .ws_client

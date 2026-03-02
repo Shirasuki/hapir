@@ -3,6 +3,7 @@ pub mod types;
 use std::future::Future;
 use std::pin::Pin;
 
+use serde::Serialize;
 use serde_json::Value;
 
 /// Build a scoped RPC method name: `"{scope_id}:{method}"`.
@@ -59,8 +60,11 @@ pub trait EventRegistry: Send + Sync {
         handler: impl Fn(Value) + Send + Sync + 'static,
     ) -> impl Future<Output = ()> + Send;
 
-    fn emit(&self, event: impl Into<String> + Send, data: Value)
-    -> impl Future<Output = ()> + Send;
+    fn emit(
+        &self,
+        event: impl Into<String> + Send,
+        data: &(impl Serialize + Send + Sync + ?Sized),
+    ) -> impl Future<Output = ()> + Send;
 
     fn register_event_group<'a>(
         &'a self,

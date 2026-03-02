@@ -1,14 +1,14 @@
 use axum::{
     Extension, Json, Router,
     extract::{Path, State},
-    http::StatusCode,
     routing::post,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use hapir_shared::modes::{AgentFlavor, PermissionMode, is_permission_mode_allowed_for_flavor};
-use hapir_shared::schemas::{AnswersFormat, PermissionDecision};
+use hapir_shared::common::agent_state::{AnswersFormat, PermissionDecision};
+use hapir_shared::common::modes::{AgentFlavor, PermissionMode, is_permission_mode_allowed_for_flavor};
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
 
 use crate::web::AppState;
 use crate::web::middleware::auth::AuthContext;
@@ -44,48 +44,24 @@ async fn approve_permission(
     Extension(auth): Extension<AuthContext>,
     Path((id, request_id)): Path<(String, String)>,
     body: Option<Json<Value>>,
-) -> (StatusCode, Json<Value>) {
-    // Parse body, treating absent body as empty object
-    let raw = body.map(|Json(v)| v).unwrap_or(json!({}));
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let raw = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
     let parsed: ApproveBody = match serde_json::from_value(raw) {
         Ok(b) => b,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid body" })),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
-    // Verify session access and require active
-    let (session_id, session) = match state
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
-    // Check that the permission request exists in agent_state
     let request_exists = session
         .agent_state
         .as_ref()
@@ -93,25 +69,16 @@ async fn approve_permission(
         .is_some_and(|r| r.contains_key(&request_id));
 
     if !request_exists {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Request not found" })),
-        );
+        return Err(ApiError::NotFound("Request not found".into()));
     }
 
-    // Validate permission mode against session flavor
     if let Some(mode) = parsed.mode {
-        let flavor: Option<AgentFlavor> = session
-            .metadata
-            .as_ref()
-            .and_then(|m| m.flavor.as_deref())
-            .and_then(|f| serde_json::from_value(Value::String(f.to_string())).ok());
+        let flavor = session.metadata.as_ref().and_then(|m| m.flavor);
 
         if !is_permission_mode_allowed_for_flavor(mode, flavor) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid permission mode for session flavor" })),
-            );
+            return Err(ApiError::BadRequest(
+                "Invalid permission mode for session flavor".into(),
+            ));
         }
     }
 
@@ -134,11 +101,8 @@ async fn approve_permission(
         )
         .await
     {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(()) => Ok(Json(ApiResponse::success())),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
@@ -147,48 +111,24 @@ async fn deny_permission(
     Extension(auth): Extension<AuthContext>,
     Path((id, request_id)): Path<(String, String)>,
     body: Option<Json<Value>>,
-) -> (StatusCode, Json<Value>) {
-    // Parse body, treating absent body as empty object
-    let raw = body.map(|Json(v)| v).unwrap_or(json!({}));
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let raw = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
     let parsed: DenyBody = match serde_json::from_value(raw) {
         Ok(b) => b,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid body" })),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
-    // Verify session access and require active
-    let (session_id, session) = match state
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
-    // Check that the permission request exists in agent_state
     let request_exists = session
         .agent_state
         .as_ref()
@@ -196,10 +136,7 @@ async fn deny_permission(
         .is_some_and(|r| r.contains_key(&request_id));
 
     if !request_exists {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Request not found" })),
-        );
+        return Err(ApiError::NotFound("Request not found".into()));
     }
 
     let decision_str = parsed.decision.map(|d| match d {
@@ -214,10 +151,7 @@ async fn deny_permission(
         .deny_permission(&session_id, &request_id, decision_str)
         .await
     {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(()) => Ok(Json(ApiResponse::success())),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }

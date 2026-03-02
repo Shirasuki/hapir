@@ -1,15 +1,15 @@
 use axum::http::HeaderValue;
+use axum::http::header::AUTHORIZATION;
 use axum::{
     Json,
     extract::{Request, State},
-    http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use serde_json::json;
 use subtle::ConstantTimeEq;
 
-use hapir_shared::version::PROTOCOL_VERSION;
+use hapir_shared::common::version::PROTOCOL_VERSION;
+use hapir_shared::frontend::api::ApiResponse;
 
 use crate::web::AppState;
 
@@ -34,6 +34,12 @@ fn parse_access_token(raw: &str) -> Option<(String, String)> {
     Some((raw.to_string(), "default".to_string()))
 }
 
+macro_rules! reject {
+    ($msg:expr) => {
+        return Err(Json(ApiResponse::<()>::error(401, $msg)).into_response())
+    };
+}
+
 /// CLI auth middleware. Validates bearer token with constant-time comparison.
 pub async fn cli_auth(
     State(state): State<AppState>,
@@ -42,50 +48,28 @@ pub async fn cli_auth(
 ) -> Result<Response, Response> {
     let auth_header = req
         .headers()
-        .get(axum::http::header::AUTHORIZATION)
+        .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
 
     let auth_header = match auth_header {
         Some(h) => h,
-        None => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Missing Authorization header"})),
-            )
-                .into_response());
-        }
+        None => reject!("Missing Authorization header"),
     };
 
     let token = match auth_header.strip_prefix("Bearer ") {
         Some(t) => t,
-        None => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid Authorization header"})),
-            )
-                .into_response());
-        }
+        None => reject!("Invalid Authorization header"),
     };
 
     let (base_token, namespace) = match parse_access_token(token) {
         Some(pair) => pair,
-        None => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid token"})),
-            )
-                .into_response());
-        }
+        None => reject!("Invalid token"),
     };
 
     let expected = state.cli_api_token.as_bytes();
     let provided = base_token.as_bytes();
     if expected.len() != provided.len() || expected.ct_eq(provided).unwrap_u8() != 1 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Invalid token"})),
-        )
-            .into_response());
+        reject!("Invalid token");
     }
 
     req.extensions_mut().insert(CliAuthContext { namespace });

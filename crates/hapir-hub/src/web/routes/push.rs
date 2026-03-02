@@ -1,11 +1,12 @@
 use axum::{
     Json, Router,
     extract::{Extension, State},
-    http::StatusCode,
     routing::{delete, get, post},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
+use hapir_shared::frontend::response_types::VapidKeyData;
 
 use crate::store::push_subscriptions::{self, PushSubscriptionInput};
 use crate::web::AppState;
@@ -18,13 +19,14 @@ pub fn router() -> Router<AppState> {
         .route("/push/subscribe", delete(unsubscribe))
 }
 
-async fn vapid_public_key(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+async fn vapid_public_key(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<VapidKeyData>>, ApiError> {
     match &state.vapid_public_key {
-        Some(key) => (StatusCode::OK, Json(json!({"publicKey": key}))),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "VAPID public key not configured"})),
-        ),
+        Some(key) => Ok(Json(ApiResponse::ok(VapidKeyData {
+            public_key: key.clone(),
+        }))),
+        None => Err(ApiError::NotFound("VAPID public key not configured".into())),
     }
 }
 
@@ -44,22 +46,16 @@ async fn subscribe(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     body: Result<Json<SubscribeBody>, axum::extract::rejection::JsonRejection>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<()>>, ApiError> {
     let Json(body) = match body {
         Ok(b) => b,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Invalid body"})),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
     if body.endpoint.is_empty() || body.keys.p256dh.is_empty() || body.keys.auth.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid body"})),
-        );
+        return Err(ApiError::BadRequest("Invalid body".into()));
     }
 
     let conn = state.store.conn();
@@ -73,7 +69,7 @@ async fn subscribe(
         },
     );
 
-    (StatusCode::OK, Json(json!({"ok": true})))
+    Ok(Json(ApiResponse::success()))
 }
 
 #[derive(Deserialize)]
@@ -85,26 +81,20 @@ async fn unsubscribe(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     body: Result<Json<UnsubscribeBody>, axum::extract::rejection::JsonRejection>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<()>>, ApiError> {
     let Json(body) = match body {
         Ok(b) => b,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Invalid body"})),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
     if body.endpoint.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid body"})),
-        );
+        return Err(ApiError::BadRequest("Invalid body".into()));
     }
 
     let conn = state.store.conn();
     push_subscriptions::remove_push_subscription(&conn, &auth.namespace, &body.endpoint);
 
-    (StatusCode::OK, Json(json!({"ok": true})))
+    Ok(Json(ApiResponse::success()))
 }

@@ -41,7 +41,12 @@ export async function fetchVoiceToken(
     options?: VoiceTokenRequest
 ): Promise<VoiceTokenResponse> {
     try {
-        return await api.fetchVoiceToken(options)
+        const result = await api.fetchVoiceToken(options)
+        return {
+            allowed: true,
+            token: result.token,
+            agentId: result.agentId,
+        }
     } catch (error) {
         return {
             allowed: false,

@@ -1,15 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
+use hapir_shared::common::utils::now_millis;
 use rusqlite::Connection;
 
 use super::types::StoredPushSubscription;
-
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
 
 fn row_to_push_sub(row: &rusqlite::Row) -> rusqlite::Result<StoredPushSubscription> {
     Ok(StoredPushSubscription {

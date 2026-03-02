@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use hapir_shared::rpc::slash_commands::{
+use hapir_shared::frontend::rpc::slash_commands::{
     RpcListSlashCommandsRequest, RpcListSlashCommandsResponse, RpcSlashCommand,
 };
 use serde_json::Value;
@@ -163,7 +163,7 @@ pub async fn register_slash_command_handlers(
 
         commands.sort_by(|a, b| a.name.cmp(&b.name));
 
-        response.success = true;
+        response.ok = true;
         response.commands = Some(commands);
         serde_json::to_value(response).unwrap()
     })

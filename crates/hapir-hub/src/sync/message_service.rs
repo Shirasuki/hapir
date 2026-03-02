@@ -1,4 +1,6 @@
-use hapir_shared::schemas::{AttachmentMetadata, DecryptedMessage, SyncEvent};
+use hapir_shared::common::modes::AgentFlavor;
+use hapir_shared::common::message::{AttachmentMetadata, DecryptedMessage};
+use hapir_shared::common::sync_event::SyncEvent;
 use serde_json::Value;
 
 use super::event_publisher::EventPublisher;
@@ -135,6 +137,7 @@ impl MessageService {
         publisher: &EventPublisher,
         session_id: &str,
         namespace: &str,
+        flavor: Option<AgentFlavor>,
         content: &Value,
         local_id: Option<&str>,
     ) -> anyhow::Result<StoredMessage> {
@@ -143,7 +146,7 @@ impl MessageService {
         let msg = messages::add_message(&store.conn(), session_id, content, local_id)?;
 
         // Extract and persist todos if present
-        if let Some(todos) = extract_todos_from_message_content(content)
+        if let Some(todos) = extract_todos_from_message_content(content, flavor)
             && let Ok(todos_val) = serde_json::to_value(&todos)
             && sessions::set_session_todos(
                 &store.conn(),
@@ -156,7 +159,7 @@ impl MessageService {
             publisher.emit(SyncEvent::SessionUpdated {
                 session_id: session_id.to_string(),
                 namespace: Some(namespace.to_string()),
-                data: Some(serde_json::json!({"sid": session_id})),
+                data: None,
             });
         }
 

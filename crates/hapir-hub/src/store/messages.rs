@@ -1,16 +1,8 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use super::types::StoredMessage;
+use hapir_shared::common::utils::now_millis;
 use rusqlite::Connection;
 use serde_json::Value;
 use uuid::Uuid;
-
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
 
 fn safe_json_parse(value: Option<String>) -> Option<Value> {
     value.and_then(|s| serde_json::from_str(&s).ok())

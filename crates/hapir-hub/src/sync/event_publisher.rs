@@ -1,4 +1,4 @@
-use hapir_shared::schemas::SyncEvent;
+use hapir_shared::common::sync_event::SyncEvent;
 use tokio::sync::{broadcast, mpsc};
 
 use super::sse_manager::{SseManager, SseMessage, SseSubscription};
@@ -13,18 +13,12 @@ pub type SyncEventListener = Box<dyn Fn(&SyncEvent) + Send + Sync>;
 pub struct EventPublisher {
     tx: broadcast::Sender<SyncEvent>,
     sse_manager: SseManager,
-    heartbeat_ms: u64,
 }
 
 impl EventPublisher {
     pub fn new(sse_manager: SseManager) -> Self {
         let (tx, _) = broadcast::channel(256);
-        let heartbeat_ms = sse_manager.heartbeat_ms();
-        Self {
-            tx,
-            sse_manager,
-            heartbeat_ms,
-        }
+        Self { tx, sse_manager }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SyncEvent> {
@@ -78,38 +72,11 @@ impl EventPublisher {
     }
 
     pub fn heartbeat_ms(&self) -> u64 {
-        self.heartbeat_ms
+        self.sse_manager.heartbeat_ms()
     }
 
     pub fn emit(&self, event: SyncEvent) {
-        let failed = self.sse_manager.broadcast(&event);
-        for id in failed {
-            self.sse_manager.unsubscribe(&id);
-        }
-
+        self.sse_manager.broadcast(&event);
         let _ = self.tx.send(event);
-    }
-
-    pub fn emit_with_namespace(&self, mut event: SyncEvent, namespace: Option<String>) {
-        if let Some(ns) = namespace {
-            set_event_namespace(&mut event, Some(ns));
-        }
-        self.emit(event);
-    }
-}
-
-/// Helper to set the namespace on a SyncEvent.
-fn set_event_namespace(event: &mut SyncEvent, namespace: Option<String>) {
-    match event {
-        SyncEvent::SessionAdded { namespace: ns, .. }
-        | SyncEvent::SessionUpdated { namespace: ns, .. }
-        | SyncEvent::SessionRemoved { namespace: ns, .. }
-        | SyncEvent::MessageReceived { namespace: ns, .. }
-        | SyncEvent::MessageDelta { namespace: ns, .. }
-        | SyncEvent::MachineUpdated { namespace: ns, .. }
-        | SyncEvent::Toast { namespace: ns, .. }
-        | SyncEvent::ConnectionChanged { namespace: ns, .. } => {
-            *ns = namespace;
-        }
     }
 }

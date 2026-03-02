@@ -106,7 +106,7 @@ function isBinaryContent(content: string): boolean {
 
 function extractCommandError(result: GitCommandResponse | undefined): string | null {
     if (!result) return null
-    if (result.success) return null
+    if (result.ok) return null
     return result.error ?? result.stderr ?? 'Failed to load diff'
 }
 
@@ -144,17 +144,17 @@ export default function FilePage() {
         enabled: Boolean(api && sessionId && filePath)
     })
 
-    const diffContent = diffQuery.data?.success ? (diffQuery.data.stdout ?? '') : ''
+    const diffContent = diffQuery.data?.ok ? (diffQuery.data.stdout ?? '') : ''
     const diffError = extractCommandError(diffQuery.data)
-    const diffSuccess = diffQuery.data?.success === true
-    const diffFailed = diffQuery.data?.success === false
+    const diffSuccess = diffQuery.data?.ok === true
+    const diffFailed = diffQuery.data?.ok === false
 
     const fileContentResult = fileQuery.data
-    const decodedContentResult = fileContentResult?.success && fileContentResult.content
+    const decodedContentResult = fileContentResult?.ok && fileContentResult.content
         ? decodeBase64(fileContentResult.content)
         : { text: '', ok: true }
     const decodedContent = decodedContentResult.text
-    const binaryFile = fileContentResult?.success
+    const binaryFile = fileContentResult?.ok
         ? !decodedContentResult.ok || isBinaryContent(decodedContent)
         : false
 
@@ -174,7 +174,7 @@ export default function FilePage() {
     }, [diffSuccess, diffFailed, diffContent])
 
     const loading = diffQuery.isLoading || fileQuery.isLoading
-    const fileError = fileContentResult && !fileContentResult.success
+    const fileError = fileContentResult && !fileContentResult.ok
         ? (fileContentResult.error ?? 'Failed to read file')
         : null
     const missingPath = !filePath

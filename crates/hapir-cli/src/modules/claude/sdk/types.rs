@@ -1,4 +1,4 @@
-use hapir_shared::modes::PermissionMode;
+use hapir_shared::common::modes::PermissionMode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -120,10 +120,7 @@ pub struct SdkLogBody {
 #[serde(tag = "type")]
 pub enum StreamEventBody {
     #[serde(rename = "content_block_delta")]
-    ContentBlockDelta {
-        index: u32,
-        delta: StreamDelta,
-    },
+    ContentBlockDelta { index: u32, delta: StreamDelta },
     #[serde(rename = "content_block_stop")]
     ContentBlockStop { index: u32 },
     #[serde(other)]

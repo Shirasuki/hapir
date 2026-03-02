@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use hapir_shared::modes::PermissionMode;
+use hapir_shared::common::modes::PermissionMode;
 use tracing::debug;
 
 /// Stub permission handler for Claude sessions.

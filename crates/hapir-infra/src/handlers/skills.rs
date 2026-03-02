@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use hapir_shared::rpc::skills::{RpcListSkillsRequest, RpcListSkillsResponse, RpcSkillSummary};
+use hapir_shared::frontend::rpc::skills::{RpcListSkillsRequest, RpcListSkillsResponse, RpcSkillSummary};
 
 use crate::rpc::RpcRegistry;
 use crate::utils::plugin::get_claude_installed_plugins;
@@ -134,7 +134,7 @@ pub async fn register_skills_handlers(rpc: &(impl RpcRegistry + Sync), _working_
         let req: RpcListSkillsRequest = serde_json::from_value(params).unwrap_or_default();
         let skills = list_skills_impl(&req.agent).await;
         response.skills = Some(skills);
-        response.success = true;
+        response.ok = true;
         serde_json::to_value(response).unwrap()
     })
     .await;

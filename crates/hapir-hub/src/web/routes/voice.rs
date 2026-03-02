@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{Json, Router, extract::State, routing::post};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::Mutex;
 
-use hapir_shared::voice::{ELEVENLABS_API_BASE, VOICE_AGENT_NAME, build_voice_agent_config};
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
+use hapir_shared::frontend::response_types::VoiceTokenData;
+use hapir_shared::hub::voice::{ELEVENLABS_API_BASE, VOICE_AGENT_NAME, build_voice_agent_config};
 
 use crate::web::AppState;
 
@@ -34,7 +36,6 @@ fn cache_key(api_key: &str) -> String {
     }
 }
 
-/// Find an existing voice agent by name.
 async fn find_agent(client: &reqwest::Client, api_key: &str) -> Option<String> {
     let url = format!("{ELEVENLABS_API_BASE}/convai/agents");
     let resp = client
@@ -60,7 +61,6 @@ async fn find_agent(client: &reqwest::Client, api_key: &str) -> Option<String> {
     })
 }
 
-/// Create a new voice agent via ElevenLabs API.
 async fn create_agent(client: &reqwest::Client, api_key: &str) -> Option<String> {
     let url = format!("{ELEVENLABS_API_BASE}/convai/agents/create");
     let config = build_voice_agent_config();
@@ -78,7 +78,6 @@ async fn create_agent(client: &reqwest::Client, api_key: &str) -> Option<String>
     if !resp.status().is_success() {
         let status = resp.status();
         let error_data: Value = resp.json().await.unwrap_or_default();
-        // Match TS: detail can be a string or { message: string }
         let error_message = error_data
             .get("detail")
             .and_then(|d| {
@@ -97,7 +96,6 @@ async fn create_agent(client: &reqwest::Client, api_key: &str) -> Option<String>
     data.get("agent_id")?.as_str().map(|s| s.to_string())
 }
 
-/// Get or create agent ID, with caching.
 async fn get_or_create_agent_id(client: &reqwest::Client, api_key: &str) -> Option<String> {
     let key = cache_key(api_key);
 
@@ -132,7 +130,7 @@ async fn get_or_create_agent_id(client: &reqwest::Client, api_key: &str) -> Opti
 async fn voice_token(
     State(_state): State<AppState>,
     body: Option<Json<VoiceTokenRequest>>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<VoiceTokenData>>, ApiError> {
     let req = body.map(|Json(b)| b).unwrap_or_default();
 
     let api_key = req
@@ -142,10 +140,9 @@ async fn voice_token(
     let api_key = match api_key {
         Some(k) if !k.is_empty() => k,
         _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "allowed": false, "error": "ElevenLabs API key not configured" })),
-            );
+            return Err(ApiError::BadRequest(
+                "ElevenLabs API key not configured".into(),
+            ));
         }
     };
 
@@ -159,12 +156,9 @@ async fn voice_token(
     if agent_id.is_none() {
         agent_id = get_or_create_agent_id(client, &api_key).await;
         if agent_id.is_none() {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(
-                    json!({ "allowed": false, "error": "Failed to create ElevenLabs agent automatically" }),
-                ),
-            );
+            return Err(ApiError::Internal(
+                "Failed to create ElevenLabs agent automatically".into(),
+            ));
         }
     }
 
@@ -185,10 +179,7 @@ async fn voice_token(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("[Voice] Error fetching token: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "allowed": false, "error": e.to_string() })),
-            );
+            return Err(ApiError::Internal(e.to_string()));
         }
     };
 
@@ -202,30 +193,21 @@ async fn voice_token(
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("ElevenLabs API error: {status}"));
         tracing::error!("[Voice] Failed to get token from ElevenLabs: {msg}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "allowed": false, "error": msg })),
-        );
+        return Err(ApiError::Internal(msg));
     }
 
     let data: Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "allowed": false, "error": e.to_string() })),
-            );
+            return Err(ApiError::Internal(e.to_string()));
         }
     };
 
     match data.get("token").and_then(|t| t.as_str()) {
-        Some(token) => (
-            StatusCode::OK,
-            Json(json!({ "allowed": true, "token": token, "agentId": agent_id })),
-        ),
-        None => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "allowed": false, "error": "No token in ElevenLabs response" })),
-        ),
+        Some(token) => Ok(Json(ApiResponse::ok(VoiceTokenData {
+            token: token.to_string(),
+            agent_id,
+        }))),
+        None => Err(ApiError::Internal("No token in ElevenLabs response".into())),
     }
 }

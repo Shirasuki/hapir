@@ -72,13 +72,13 @@ export function createAttachmentAdapter(api: ApiClient, sessionId: string): Atta
 
                 const result = await api.uploadFile(sessionId, file.name, content, contentType)
                 if (cancelledAttachmentIds.has(id)) {
-                    if (result.success && result.path) {
+                    if (result.ok && result.path) {
                         await deleteUpload(result.path)
                     }
                     return
                 }
 
-                if (!result.success || !result.path) {
+                if (!result.ok || !result.path) {
                     yield {
                         id,
                         type: 'file',
@@ -135,7 +135,7 @@ export function createAttachmentAdapter(api: ApiClient, sessionId: string): Atta
                 mimeType: attachment.contentType ?? 'application/octet-stream',
                 size: attachment.file?.size ?? 0,
                 path,
-                previewUrl: pending.previewUrl
+                previewUrl: pending.previewUrl ?? null
             } : undefined
 
             return {

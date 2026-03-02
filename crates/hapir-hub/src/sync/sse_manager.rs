@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use hapir_shared::schemas::SyncEvent;
+use hapir_shared::common::sync_event::SyncEvent;
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -120,8 +120,8 @@ impl SseManager {
     }
 
     /// Broadcast an event to all matching connections.
-    /// Returns IDs of connections that failed delivery (for deferred cleanup).
-    pub fn broadcast(&self, event: &SyncEvent) -> Vec<String> {
+    /// Auto-unsubscribes failed connections.
+    pub fn broadcast(&self, event: &SyncEvent) {
         let conns = self.snapshot();
         let event_type = event_type_name(event);
         let event_sid = event_session_id(event);
@@ -144,7 +144,9 @@ impl SseManager {
             failed = failed.len(),
             "SSE broadcast"
         );
-        failed
+        for id in failed {
+            self.unsubscribe(&id);
+        }
     }
 
     /// Send a toast to visible connections in a namespace. Returns delivery count.
@@ -182,16 +184,6 @@ impl SseManager {
         }
         for id in failed {
             self.unsubscribe(&id);
-        }
-    }
-
-    /// Clean up connections whose senders have been dropped.
-    pub fn cleanup_dead(&self) {
-        let conns = self.snapshot();
-        for conn in &conns {
-            if conn.tx.is_closed() {
-                self.unsubscribe(&conn.sub.id);
-            }
         }
     }
 

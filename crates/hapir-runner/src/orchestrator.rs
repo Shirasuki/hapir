@@ -9,10 +9,11 @@ use hapir_infra::rpc::RpcRegistry;
 use hapir_infra::utils::machine::build_machine_metadata;
 use hapir_infra::utils::process::spawn_runner_background;
 use hapir_infra::ws::machine_client::WsMachineClient;
-use hapir_shared::schemas::{MachineRunnerState, MachineRunnerStatus};
+use hapir_shared::common::machine::{MachineRunnerState, MachineRunnerStatus};
+use hapir_shared::common::utils::now_millis;
 use serde_json::json;
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -73,7 +74,7 @@ pub async fn start_sync(config: &CliConfiguration) -> anyhow::Result<()> {
     let state = RunnerState::new_mpsc(shutdown_tx.clone());
     let port = control_server::start(state.clone()).await?;
 
-    let start_time_ms = epoch_ms();
+    let start_time_ms = now_millis();
     let cli_mtime_ms = get_cli_mtime_ms();
     let runner_local_state = persistence::RunnerLocalState {
         pid: std::process::id(),
@@ -90,8 +91,6 @@ pub async fn start_sync(config: &CliConfiguration) -> anyhow::Result<()> {
 
     info!(port = port, pid = std::process::id(), "runner started");
     eprintln!("Runner started on port {port} (pid {})", std::process::id());
-
-    // PLACEHOLDER_HUB_WS
 
     let ws_holder: Arc<OnceLock<Arc<WsMachineClient>>> = Arc::new(OnceLock::new());
 
@@ -126,8 +125,6 @@ pub async fn start_sync(config: &CliConfiguration) -> anyhow::Result<()> {
             });
         }
     };
-
-    // PLACEHOLDER_HEARTBEAT
 
     let heartbeat_handle = {
         let runner_state_clone = state.clone();
@@ -191,8 +188,6 @@ pub async fn start_sync(config: &CliConfiguration) -> anyhow::Result<()> {
         }))
     };
 
-    // PLACEHOLDER_SIGNALS
-
     let signal_tx = shutdown_tx.clone();
     tokio::spawn(async move {
         #[cfg(unix)]
@@ -225,7 +220,7 @@ pub async fn start_sync(config: &CliConfiguration) -> anyhow::Result<()> {
     info!(source = ?shutdown_source, "runner shutting down");
 
     if let Some(ws) = ws_holder.get() {
-        let shutdown_at = epoch_ms();
+        let shutdown_at = now_millis();
         let source_str = shutdown_source.as_str().to_string();
         if let Err(e) = ws
             .update_runner_state(|mut s| {
@@ -264,8 +259,6 @@ pub async fn start_sync(config: &CliConfiguration) -> anyhow::Result<()> {
     eprintln!("Runner stopped.");
     Ok(())
 }
-
-// PLACEHOLDER_CONNECT_TO_HUB
 
 /// Connect to the hub via WebSocket, register RPC handlers, and send initial state.
 async fn connect_to_hub(
@@ -321,8 +314,6 @@ async fn connect_to_hub(
         }
     };
 
-    // PLACEHOLDER_WS_SETUP
-
     let ws = Arc::new(WsMachineClient::new(
         &config.api_url,
         &config.cli_api_token,
@@ -377,8 +368,6 @@ async fn connect_to_hub(
         })
     })
     .await;
-
-    // PLACEHOLDER_MORE_RPC
 
     let rs = runner_state.clone();
     ws.register_rpc("stop-runner", move |_data| {
@@ -458,14 +447,6 @@ async fn connect_to_hub(
 
     info!(machine_id = %machine_id, "connected to hub via WebSocket");
     Ok(ws)
-}
-
-/// Current time as epoch milliseconds.
-fn epoch_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
 }
 
 /// Format current time as a human-readable local string (MM/DD/YYYY, HH:MM:SS AM/PM).

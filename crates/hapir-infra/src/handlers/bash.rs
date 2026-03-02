@@ -4,7 +4,7 @@ use serde_json::Value;
 use tokio::process::Command;
 use tracing::debug;
 
-use hapir_shared::rpc::bash::{RpcBashRequest, RpcCommandResponse};
+use hapir_shared::frontend::rpc::bash::{RpcBashRequest, RpcCommandResponse};
 
 use crate::rpc::RpcRegistry;
 use crate::utils::path_security::validate_path;
@@ -50,14 +50,14 @@ pub async fn register_bash_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
                     let code = output.status.code().unwrap_or(1);
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    response.success = output.status.success();
+                    response.ok = output.status.success();
                     response.stdout = Some(stdout.clone());
                     response.stderr = Some(stderr.clone());
                     response.exit_code = Some(code);
                     serde_json::to_value(response).unwrap()
                 }
                 Ok(Err(e)) => {
-                    response.success = false;
+                    response.ok = false;
                     response.stdout = Some(String::new());
                     response.stderr = Some(e.to_string());
                     response.exit_code = Some(1);
@@ -65,7 +65,7 @@ pub async fn register_bash_handlers(rpc: &(impl RpcRegistry + Sync), working_dir
                     serde_json::to_value(response).unwrap()
                 }
                 Err(_) => {
-                    response.success = false;
+                    response.ok = false;
                     response.stdout = Some(String::new());
                     response.stderr = Some(String::new());
                     response.exit_code = Some(-1);

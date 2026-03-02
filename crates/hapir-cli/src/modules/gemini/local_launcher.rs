@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
-use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
-use hapir_shared::session::FlatMessage;
+use hapir_shared::common::metadata::SessionStartedBy as SharedStartedBy;
+use hapir_shared::common::session_messages::FlatMessage;
 
 use crate::agent::local_launch_policy::{
     LocalLaunchContext, LocalLaunchExitReason, get_local_launch_exit_reason,

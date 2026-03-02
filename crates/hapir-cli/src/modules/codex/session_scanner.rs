@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{Duration, TimeZone, Utc};
 use serde_json::Value;
@@ -9,7 +8,7 @@ use tracing::debug;
 
 use crate::agent::local_sync::LocalSessionScanner;
 
-use hapir_shared::session::{AgentContent, RoleWrappedMessage};
+use hapir_shared::common::session_messages::{AgentContent, RoleWrappedMessage};
 
 pub type SessionFoundCallback = Box<dyn Fn(&str) + Send + Sync>;
 
@@ -38,10 +37,7 @@ impl CodexSessionScanner {
         let home = dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let sessions_root = home.join(".codex").join("sessions");
 
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now_ms = hapir_shared::common::utils::now_millis() as u64;
 
         let window_ms = 120_000;
         let date_prefixes = compute_date_prefixes(now_ms, window_ms);
@@ -136,7 +132,6 @@ impl CodexSessionScanner {
         }
     }
 }
-// PLACEHOLDER_TRAIT
 
 impl LocalSessionScanner for CodexSessionScanner {
     async fn scan(&mut self) -> Vec<Value> {
@@ -235,7 +230,6 @@ impl LocalSessionScanner for CodexSessionScanner {
         self.active_session_id = None;
     }
 }
-// PLACEHOLDER_HELPERS
 
 fn codex_message_value(data: Value) -> Value {
     serde_json::to_value(&RoleWrappedMessage {

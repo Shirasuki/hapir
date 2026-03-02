@@ -3,12 +3,12 @@ use clap::Parser;
 use std::env;
 use tracing::debug;
 
-use hapir_shared::modes::SessionMode;
 use crate::commands::common;
 use crate::modules::opencode;
 use crate::modules::opencode::run::OpencodeStartOptions;
 use hapir_infra::config::CliConfiguration;
-use hapir_shared::schemas::SessionStartedBy;
+use hapir_shared::common::modes::SessionMode;
+use hapir_shared::common::metadata::SessionStartedBy;
 use opencode::run::run_opencode;
 
 /// Parsed arguments for the opencode command.

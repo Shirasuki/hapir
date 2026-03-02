@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use super::outbox::SocketOutbox;
 use super::protocol::{WsMessage, WsRequest};
-use crate::utils::time::epoch_ms;
 use futures::{SinkExt, StreamExt};
-use hapir_shared::socket::RpcRegisterRequest;
+use hapir_shared::cli::socket::RpcRegisterRequest;
+use hapir_shared::common::utils::now_millis;
+use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use tokio::time;
@@ -120,11 +121,10 @@ impl WsClient {
     ) {
         let handlers = handlers.read().await;
         for method in handlers.keys() {
-            let payload = serde_json::to_value(&RpcRegisterRequest {
+            let payload = RpcRegisterRequest {
                 method: method.clone(),
-            })
-            .unwrap_or_default();
-            let req = WsRequest::fire("rpc-register", payload);
+            };
+            let req = WsRequest::fire("rpc-register", &payload);
             if let Ok(json) = serde_json::to_string(&req) {
                 let _ = tx.send(Message::Text(json.into()));
             }
@@ -190,7 +190,7 @@ impl WsClient {
                 break;
             }
             let last = activity.load(Ordering::Relaxed);
-            let now = epoch_ms();
+            let now = now_millis() as u64;
             if now.saturating_sub(last) > dead_timeout.as_millis() as u64 {
                 warn!(
                     "no activity for {}s, connection presumed dead",
@@ -218,7 +218,7 @@ impl WsClient {
             if shutdown.load(Ordering::Relaxed) {
                 break;
             }
-            activity.store(epoch_ms(), Ordering::Relaxed);
+            activity.store(now_millis() as u64, Ordering::Relaxed);
 
             match msg {
                 Ok(Message::Text(text)) => {
@@ -355,7 +355,7 @@ impl WsClient {
                 backoff = Duration::from_secs(1);
                 attempts = 0;
 
-                last_activity.store(epoch_ms(), Ordering::Relaxed);
+                last_activity.store(now_millis() as u64, Ordering::Relaxed);
 
                 let (write, read) = ws_stream.split();
                 let (send_tx, send_rx) = mpsc::unbounded_channel::<Message>();
@@ -451,7 +451,7 @@ impl WsClient {
         *self.on_disconnect.lock().await = Some(Box::new(f));
     }
 
-    pub async fn emit(&self, event: impl Into<String>, data: Value) {
+    pub async fn emit(&self, event: impl Into<String>, data: &(impl Serialize + ?Sized)) {
         let req = WsRequest::fire(event, data);
         let json = match serde_json::to_string(&req) {
             Ok(j) => j,
@@ -470,7 +470,7 @@ impl WsClient {
     pub async fn emit_with_ack(
         &self,
         event: impl Into<String>,
-        data: Value,
+        data: &(impl Serialize + ?Sized),
     ) -> anyhow::Result<Value> {
         let (req, id) = WsRequest::with_ack(event, data);
         let json = serde_json::to_string(&req)?;

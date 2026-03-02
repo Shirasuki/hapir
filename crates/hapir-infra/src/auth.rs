@@ -3,7 +3,7 @@ use crate::config::CliConfiguration;
 use crate::persistence;
 use crate::utils::machine::build_machine_metadata;
 use anyhow::{Context, Result};
-use hapir_shared::schemas::MachineRunnerState;
+use hapir_shared::common::machine::MachineRunnerState;
 use tracing::info;
 use uuid::Uuid;
 

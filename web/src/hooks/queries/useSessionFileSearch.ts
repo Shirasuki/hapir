@@ -25,10 +25,7 @@ export function useSessionFileSearch(
                 throw new Error('Session unavailable')
             }
             const response = await api.searchSessionFiles(sessionId, query, limit)
-            if (!response.success) {
-                return { files: [], error: response.error ?? 'Failed to search files' }
-            }
-            return { files: response.files ?? [], error: null }
+            return { files: response.files, error: null }
         },
         enabled,
     })

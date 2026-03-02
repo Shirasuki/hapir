@@ -3,7 +3,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::sync::SyncEngine;
-use hapir_shared::schemas::{Session, SyncEvent, ToastData};
+use hapir_shared::common::session::Session;
+use hapir_shared::common::sync_event::{SyncEvent, ToastData};
 
 use super::push_service::{PushData, PushPayload, PushService};
 use super::session_naming::{get_agent_name, get_session_name};

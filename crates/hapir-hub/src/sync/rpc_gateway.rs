@@ -1,17 +1,24 @@
 use crate::ws::connection_manager::RpcCallError;
 use anyhow::bail;
-use hapir_shared::modes::{ModelMode, PermissionMode};
-use hapir_shared::rpc::bash::RpcCommandResponse;
-use hapir_shared::rpc::directories::{RpcListDirectoryRequest, RpcListDirectoryResponse};
-use hapir_shared::rpc::files::{RpcReadFileRequest, RpcReadFileResponse};
-use hapir_shared::rpc::git::{
+use hapir_shared::cli::gateway::{
+    RpcAbortRequest, RpcPathExistsRequest, RpcPermissionRequest, RpcSetSessionConfigRequest,
+    RpcSpawnSessionRequest, RpcSwitchRequest, RpcUserMessageRequest,
+};
+use hapir_shared::common::agent_state::AnswersFormat;
+use hapir_shared::common::message::AttachmentMetadata;
+use hapir_shared::common::modes::{ModelMode, PermissionMode};
+use hapir_shared::frontend::rpc::bash::RpcCommandResponse;
+use hapir_shared::frontend::rpc::directories::{RpcListDirectoryRequest, RpcListDirectoryResponse};
+use hapir_shared::frontend::rpc::files::{RpcReadFileRequest, RpcReadFileResponse};
+use hapir_shared::frontend::rpc::git::{
     RpcGitDiffFileRequest, RpcGitDiffNumstatRequest, RpcGitStatusRequest,
 };
-use hapir_shared::rpc::ripgrep::RpcRipgrepRequest;
-use hapir_shared::rpc::uploads::{
+use hapir_shared::frontend::rpc::ripgrep::RpcRipgrepRequest;
+use hapir_shared::frontend::rpc::skills::RpcListSkillsRequest;
+use hapir_shared::frontend::rpc::slash_commands::RpcListSlashCommandsRequest;
+use hapir_shared::frontend::rpc::uploads::{
     RpcDeleteUploadRequest, RpcDeleteUploadResponse, RpcUploadFileRequest, RpcUploadFileResponse,
 };
-use hapir_shared::schemas::{AnswersFormat, AttachmentMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -72,7 +79,7 @@ impl RpcGateway {
         &self,
         session_id: &str,
         method: &str,
-        params: Value,
+        params: &impl Serialize,
     ) -> anyhow::Result<Value> {
         self.rpc_call(&format!("{session_id}:{method}"), params)
             .await
@@ -82,13 +89,14 @@ impl RpcGateway {
         &self,
         machine_id: &str,
         method: &str,
-        params: Value,
+        params: &impl Serialize,
     ) -> anyhow::Result<Value> {
         self.rpc_call(&format!("{machine_id}:{method}"), params)
             .await
     }
 
-    async fn rpc_call(&self, method: &str, params: Value) -> anyhow::Result<Value> {
+    async fn rpc_call(&self, method: &str, params: &impl Serialize) -> anyhow::Result<Value> {
+        let params_value = serde_json::to_value(params)?;
         debug!(method, "RPC call initiating");
 
         // When the handler is not yet registered, poll briefly before giving up.
@@ -101,7 +109,7 @@ impl RpcGateway {
             let deadline = Instant::now() + MAX_WAIT;
 
             loop {
-                match self.transport.rpc_call(method, params.clone()).await {
+                match self.transport.rpc_call(method, params_value.clone()).await {
                     Ok(rx) => break rx,
                     Err(RpcCallError::SendFailed) => {
                         bail!("RPC send failed (connection lost): {method}");
@@ -154,14 +162,14 @@ impl RpcGateway {
         self.session_rpc(
             session_id,
             "permission",
-            serde_json::json!({
-                "id": request_id,
-                "approved": true,
-                "mode": mode,
-                "allowTools": allow_tools,
-                "decision": decision,
-                "answers": answers,
-            }),
+            &RpcPermissionRequest {
+                id: request_id.to_string(),
+                approved: true,
+                mode,
+                allow_tools,
+                decision: decision.map(Into::into),
+                answers,
+            },
         )
         .await?;
         Ok(())
@@ -176,11 +184,14 @@ impl RpcGateway {
         self.session_rpc(
             session_id,
             "permission",
-            serde_json::json!({
-                "id": request_id,
-                "approved": false,
-                "decision": decision,
-            }),
+            &RpcPermissionRequest {
+                id: request_id.to_string(),
+                approved: false,
+                mode: None,
+                allow_tools: None,
+                decision: decision.map(Into::into),
+                answers: None,
+            },
         )
         .await?;
         Ok(())
@@ -192,17 +203,21 @@ impl RpcGateway {
         self.session_rpc(
             session_id,
             "abort",
-            serde_json::json!({
-                "reason": "User aborted via Telegram Bot"
-            }),
+            &RpcAbortRequest {
+                reason: "User aborted via Telegram Bot".into(),
+            },
         )
         .await?;
         Ok(())
     }
 
     pub async fn switch_session(&self, session_id: &str, to: &str) -> anyhow::Result<()> {
-        self.session_rpc(session_id, "switch", serde_json::json!({"to": to}))
-            .await?;
+        self.session_rpc(
+            session_id,
+            "switch",
+            &RpcSwitchRequest { to: to.to_string() },
+        )
+        .await?;
         Ok(())
     }
 
@@ -215,10 +230,10 @@ impl RpcGateway {
         self.session_rpc(
             session_id,
             "set-session-config",
-            serde_json::json!({
-                "permissionMode": permission_mode,
-                "modelMode": model_mode,
-            }),
+            &RpcSetSessionConfigRequest {
+                permission_mode,
+                model_mode,
+            },
         )
         .await
     }
@@ -232,16 +247,16 @@ impl RpcGateway {
         self.session_rpc(
             session_id,
             "on-user-message",
-            serde_json::json!({
-                "message": message,
-                "attachments": attachments,
-            }),
+            &RpcUserMessageRequest {
+                message,
+                attachments,
+            },
         )
         .await
     }
 
     pub async fn kill_session(&self, session_id: &str) -> anyhow::Result<()> {
-        self.session_rpc(session_id, "killSession", serde_json::json!({}))
+        self.session_rpc(session_id, "killSession", &serde_json::json!({}))
             .await?;
         Ok(())
     }
@@ -263,16 +278,16 @@ impl RpcGateway {
             .machine_rpc(
                 machine_id,
                 "spawn-happy-session",
-                serde_json::json!({
-                    "type": "spawn-in-directory",
-                    "directory": directory,
-                    "agent": agent,
-                    "model": model,
-                    "yolo": yolo,
-                    "sessionType": session_type,
-                    "worktreeName": worktree_name,
-                    "resumeSessionId": resume_session_id,
-                }),
+                &RpcSpawnSessionRequest {
+                    spawn_type: "spawn-in-directory",
+                    directory,
+                    agent,
+                    model,
+                    yolo,
+                    session_type,
+                    worktree_name,
+                    resume_session_id,
+                },
             )
             .await;
 
@@ -327,9 +342,7 @@ impl RpcGateway {
             cwd: cwd.map(Into::into),
             ..Default::default()
         };
-        let val = self
-            .session_rpc(session_id, "git-status", serde_json::to_value(req)?)
-            .await?;
+        let val = self.session_rpc(session_id, "git-status", &req).await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -344,9 +357,7 @@ impl RpcGateway {
             staged,
             ..Default::default()
         };
-        let val = self
-            .session_rpc(session_id, "git-diff-numstat", serde_json::to_value(req)?)
-            .await?;
+        let val = self.session_rpc(session_id, "git-diff-numstat", &req).await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -363,9 +374,7 @@ impl RpcGateway {
             staged,
             ..Default::default()
         };
-        let val = self
-            .session_rpc(session_id, "git-diff-file", serde_json::to_value(req)?)
-            .await?;
+        let val = self.session_rpc(session_id, "git-diff-file", &req).await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -377,9 +386,7 @@ impl RpcGateway {
         path: &str,
     ) -> anyhow::Result<RpcReadFileResponse> {
         let req = RpcReadFileRequest { path: path.into() };
-        let val = self
-            .session_rpc(session_id, "readFile", serde_json::to_value(req)?)
-            .await?;
+        let val = self.session_rpc(session_id, "readFile", &req).await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -389,9 +396,7 @@ impl RpcGateway {
         path: &str,
     ) -> anyhow::Result<RpcListDirectoryResponse> {
         let req = RpcListDirectoryRequest { path: path.into() };
-        let val = self
-            .session_rpc(session_id, "listDirectory", serde_json::to_value(req)?)
-            .await?;
+        let val = self.session_rpc(session_id, "listDirectory", &req).await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -407,9 +412,7 @@ impl RpcGateway {
             content: content.into(),
             session_id: session_id.into(),
         };
-        let val = self
-            .session_rpc(session_id, "uploadFile", serde_json::to_value(req)?)
-            .await?;
+        let val = self.session_rpc(session_id, "uploadFile", &req).await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -422,9 +425,7 @@ impl RpcGateway {
             path: path.into(),
             session_id: session_id.into(),
         };
-        let val = self
-            .session_rpc(session_id, "deleteUpload", serde_json::to_value(req)?)
-            .await?;
+        let val = self.session_rpc(session_id, "deleteUpload", &req).await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -438,9 +439,7 @@ impl RpcGateway {
             args: args.to_vec(),
             cwd: cwd.map(Into::into),
         };
-        let val = self
-            .session_rpc(session_id, "ripgrep", serde_json::to_value(req)?)
-            .await?;
+        let val = self.session_rpc(session_id, "ripgrep", &req).await?;
         Ok(serde_json::from_value(val)?)
     }
 
@@ -450,11 +449,7 @@ impl RpcGateway {
         paths: &[String],
     ) -> anyhow::Result<HashMap<String, bool>> {
         let val = self
-            .machine_rpc(
-                machine_id,
-                "path-exists",
-                serde_json::json!({"paths": paths}),
-            )
+            .machine_rpc(machine_id, "path-exists", &RpcPathExistsRequest { paths })
             .await?;
         let exists = val
             .get("exists")
@@ -471,7 +466,9 @@ impl RpcGateway {
         self.session_rpc(
             session_id,
             "listSlashCommands",
-            serde_json::json!({"agent": agent}),
+            &RpcListSlashCommandsRequest {
+                agent: agent.to_string(),
+            },
         )
         .await
     }
@@ -480,7 +477,9 @@ impl RpcGateway {
         self.session_rpc(
             session_id,
             "listSkills",
-            serde_json::json!({"agent": agent}),
+            &RpcListSkillsRequest {
+                agent: agent.to_string(),
+            },
         )
         .await
     }

@@ -180,10 +180,7 @@ fn build_common_args(options: &QueryOptions) -> Vec<String> {
 
 fn spawn_stdout_reader(
     stdout: tokio::process::ChildStdout,
-) -> (
-    mpsc::UnboundedReceiver<SdkMessage>,
-    JoinHandle<()>,
-) {
+) -> (mpsc::UnboundedReceiver<SdkMessage>, JoinHandle<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let handle = tokio::spawn(async move {
         let reader = BufReader::new(stdout);

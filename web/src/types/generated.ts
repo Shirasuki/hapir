@@ -12,7 +12,7 @@ export type HapirSessionMetadata = { path: string, host: string, version: string
 /**
  * Can be null or absent
  */
-flavor?: string | null, worktree: SessionWorktreeMetadata | null, };
+flavor?: AgentFlavor | null, worktree: SessionWorktreeMetadata | null, };
 export type SessionStartedBy = "runner" | "terminal";
 export type AgentStateRequest = { tool: string, arguments: JsonValue, createdAt?: number | null, };
 export type CompletedRequestStatus = "canceled" | "denied" | "approved";
@@ -27,11 +27,24 @@ export type TodoItem = { content: string, status: TodoStatus, priority: TodoPrio
 export type AttachmentMetadata = { id: string, filename: string, mimeType: string, size: number, path: string, previewUrl: string | null, };
 export type DecryptedMessage = { id: string, seq: number | null, localId: string | null, content: JsonValue, createdAt: number, };
 export type Session = { id: string, namespace: string, seq: number, createdAt: number, updatedAt: number, active: boolean, activeAt: number, metadata: HapirSessionMetadata | null, metadataVersion: number, agentState: AgentState | null, agentStateVersion: number, thinking: boolean, thinkingAt: number, thinkingStatus: string | null, todos: Array<TodoItem> | null, permissionMode: PermissionMode | null, modelMode: ModelMode | null, };
-export type SyncEvent = { "type": "session-added", sessionId: string, namespace: string | null, data: JsonValue | null, } | { "type": "session-updated", sessionId: string, namespace: string | null, data: JsonValue | null, } | { "type": "session-removed", sessionId: string, namespace: string | null, } | { "type": "message-received", sessionId: string, namespace: string | null, message: DecryptedMessage, } | { "type": "message-delta", sessionId: string, namespace: string | null, delta: MessageDeltaData, } | { "type": "machine-updated", machineId: string, namespace: string | null, data: JsonValue | null, } | { "type": "toast", namespace: string | null, data: ToastData, } | { "type": "connection-changed", namespace: string | null, data: ConnectionChangedData | null, };
+export type SyncEvent = { "type": "session-added", sessionId: string, namespace: string | null, data: Session | null, } | { "type": "session-updated", sessionId: string, namespace: string | null, data: Session | null, } | { "type": "session-removed", sessionId: string, namespace: string | null, } | { "type": "message-received", sessionId: string, namespace: string | null, message: DecryptedMessage, } | { "type": "message-delta", sessionId: string, namespace: string | null, delta: MessageDeltaData, } | { "type": "machine-updated", machineId: string, namespace: string | null, data: JsonValue | null, } | { "type": "toast", namespace: string | null, data: ToastData, } | { "type": "connection-changed", namespace: string | null, data: ConnectionChangedData | null, };
 export type ToastData = { title: string, body: string, sessionId: string, url: string, };
 export type ConnectionChangedData = { status: string, subscriptionId: string | null, };
 export type MessageDeltaData = { messageId: string, localId: string | null, text: string, isFinal: boolean, seq: number | null, };
 export type SummaryText = { text: string, };
 export type TodoProgress = { completed: number, total: number, };
-export type SessionSummaryMetadata = { name: string | null, path: string, machineId: string | null, summary: SummaryText | null, flavor?: string | null, worktree: SessionWorktreeMetadata | null, };
+export type SessionSummaryMetadata = { name: string | null, path: string, machineId: string | null, summary: SummaryText | null, flavor?: AgentFlavor | null, worktree: SessionWorktreeMetadata | null, };
 export type SessionSummary = { id: string, active: boolean, thinking: boolean, activeAt: number, updatedAt: number, metadata: SessionSummaryMetadata | null, todoProgress: TodoProgress | null, pendingRequestsCount: number, modelMode: ModelMode | null, };
+export type RpcCommandResponse = { ok: boolean, stdout: string | null, stderr: string | null, exitCode: number | null, error: string | null, };
+export type RpcReadFileResponse = { ok: boolean, content: string | null, error: string | null, };
+export type RpcWriteFileResponse = { ok: boolean, hash: string | null, error: string | null, };
+export type RpcDirectoryEntry = { name: string, type: FsEntryType, size: number | null, modified: number | null, };
+export type RpcListDirectoryResponse = { ok: boolean, entries: Array<RpcDirectoryEntry> | null, error: string | null, };
+export type RpcTreeNode = { name: string, path: string, type: FsEntryType, size: number, modified: number | null, children: Array<RpcTreeNode> | null, };
+export type RpcGetDirectoryTreeResponse = { ok: boolean, tree: RpcTreeNode | null, error: string | null, };
+export type RpcUploadFileResponse = { ok: boolean, path: string | null, error: string | null, };
+export type RpcDeleteUploadResponse = { ok: boolean, error: string | null, };
+export type RpcSkillSummary = { name: string, description: string | null, };
+export type RpcListSkillsResponse = { ok: boolean, skills: Array<RpcSkillSummary> | null, error: string | null, };
+export type RpcSlashCommand = { name: string, description: string, source: string, content: string | null, pluginName: string | null, };
+export type RpcListSlashCommandsResponse = { ok: boolean, commands: Array<RpcSlashCommand> | null, error: string | null, };

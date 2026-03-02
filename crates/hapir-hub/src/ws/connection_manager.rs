@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use hapir_shared::ws_protocol::WsMessage;
-use serde_json::Value;
-use tokio::sync::{RwLock, mpsc, oneshot};
-
 use super::rpc_registry::RpcRegistry;
 use crate::sync::rpc_gateway::RpcTransport;
+use hapir_shared::cli::ws_protocol::WsMessage;
+use serde_json::Value;
+use tokio::sync::{mpsc, oneshot, RwLock};
+use tracing::info;
 
 /// Distinguishes why an RPC call could not be dispatched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,12 @@ pub struct WsConnection {
 pub enum WsConnType {
     Cli,
     Terminal,
+}
+
+/// Identifies which kind of room a scope was found in, along with one of its connection IDs.
+pub enum ScopeConnection {
+    Session(String),
+    Machine(String),
 }
 
 /// Tracks pending RPC calls waiting for ack responses.
@@ -97,7 +103,7 @@ impl ConnectionManager {
         self.connections.write().await.remove(conn_id);
     }
 
-    pub async fn get_connection_tx(
+    async fn get_connection_tx(
         &self,
         conn_id: &str,
     ) -> Option<mpsc::UnboundedSender<WsOutMessage>> {
@@ -108,23 +114,17 @@ impl ConnectionManager {
             .map(|c| c.tx.clone())
     }
 
-    pub async fn get_connection_namespace(&self, conn_id: &str) -> Option<String> {
-        self.connections
-            .read()
-            .await
-            .get(conn_id)
-            .map(|c| c.namespace.clone())
-    }
-
-    /// Read-only access to the connections map.
-    pub async fn connections_read(
-        &self,
-    ) -> tokio::sync::RwLockReadGuard<'_, HashMap<String, WsConnection>> {
-        self.connections.read().await
+    /// Execute a closure with a reference to the connection while holding the read lock.
+    /// Returns `None` if no connection with the given ID exists.
+    pub async fn with_connection<T, F>(&self, conn_id: &str, f: F) -> Option<T>
+    where
+        F: FnOnce(&WsConnection) -> T,
+    {
+        self.connections.read().await.get(conn_id).map(f)
     }
 
     /// Send a text message to a specific connection.
-    pub async fn send_to(&self, conn_id: &str, msg: &str) -> bool {
+    pub async fn send_to(&self, conn_id: &str, msg: &impl ToString) -> bool {
         if let Some(tx) = self.get_connection_tx(conn_id).await {
             tx.send(WsOutMessage::Text(msg.to_string())).is_ok()
         } else {
@@ -141,7 +141,12 @@ impl ConnectionManager {
     }
 
     /// Broadcast to all connections in a session room, optionally excluding a sender.
-    pub async fn broadcast_to_session(&self, session_id: &str, msg: &str, exclude: Option<&str>) {
+    pub async fn broadcast_to_session(
+        &self,
+        session_id: &str,
+        msg: &impl ToString,
+        exclude: Option<&str>,
+    ) {
         let rooms = self.session_rooms.read().await;
         if let Some(members) = rooms.get(session_id) {
             let conns = self.connections.read().await;
@@ -157,7 +162,12 @@ impl ConnectionManager {
     }
 
     /// Broadcast to all connections in a machine room, optionally excluding a sender.
-    pub async fn broadcast_to_machine(&self, machine_id: &str, msg: &str, exclude: Option<&str>) {
+    pub async fn broadcast_to_machine(
+        &self,
+        machine_id: &str,
+        msg: &impl ToString,
+        exclude: Option<&str>,
+    ) {
         let rooms = self.machine_rooms.read().await;
         if let Some(members) = rooms.get(machine_id) {
             let conns = self.connections.read().await;
@@ -208,31 +218,24 @@ impl ConnectionManager {
         None
     }
 
-    /// Check whether any connection exists in the session or machine room for the given scope.
-    pub async fn has_scope_connection(&self, scope: &str) -> bool {
-        {
-            let rooms = self.session_rooms.read().await;
-            if let Some(members) = rooms.get(scope) {
-                if !members.is_empty() {
-                    return true;
-                }
-            }
+    /// Find a connection in the session or machine room for the given scope.
+    /// Returns the first connection ID found, tagged with which room it came from.
+    async fn find_scope_connection(&self, scope: &str) -> Option<ScopeConnection> {
+        let rooms = self.session_rooms.read().await;
+        if let Some(conn_id) = rooms.get(scope).and_then(|m| m.first()) {
+            return Some(ScopeConnection::Session(conn_id.clone()));
         }
-        {
-            let rooms = self.machine_rooms.read().await;
-            if let Some(members) = rooms.get(scope) {
-                if !members.is_empty() {
-                    return true;
-                }
-            }
+
+        let rooms = self.machine_rooms.read().await;
+        if let Some(conn_id) = rooms.get(scope).and_then(|m| m.first()) {
+            return Some(ScopeConnection::Machine(conn_id.clone()));
         }
-        false
+
+        None
     }
 
-    // --- RPC ---
-
     pub async fn rpc_register(&self, conn_id: &str, method: &str) {
-        tracing::info!(conn_id, method, "RPC method registered");
+        info!(conn_id, method, "RPC method registered");
         self.rpc_registry.write().await.register(conn_id, method);
     }
 
@@ -252,7 +255,7 @@ impl ConnectionManager {
     /// Initiate an RPC call: find the connection for the method, send request, return receiver.
     /// Returns `Err(RpcCallError::NotRegistered)` when no handler is registered,
     /// or `Err(RpcCallError::SendFailed)` when the handler exists but the send fails.
-    pub async fn rpc_call_internal(
+    async fn rpc_call_internal(
         &self,
         method: &str,
         params: Value,
@@ -343,6 +346,6 @@ impl RpcTransport for ConnectionManager {
 
     fn has_scope_connection(&self, scope: &str) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
         let scope = scope.to_string();
-        Box::pin(async move { self.has_scope_connection(&scope).await })
+        Box::pin(async move { self.find_scope_connection(&scope).await.is_some() })
     }
 }

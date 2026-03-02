@@ -1,11 +1,16 @@
-use hapir_shared::messages::unwrap_role_wrapped_record_envelope;
-use hapir_shared::schemas::{TodoItem, TodoPriority, TodoStatus};
-use hapir_shared::utils::is_object;
+use hapir_shared::common::modes::AgentFlavor;
+use hapir_shared::common::session_messages::unwrap_role_wrapped_record_envelope;
+use hapir_shared::common::todo::{TodoItem, TodoPriority, TodoStatus};
+use hapir_shared::common::utils::is_object;
 use serde_json::Value;
+use tracing::warn;
 
 /// Extract TodoWrite todos from a message content envelope.
-/// Supports Claude output, Codex tool-call, and ACP plan formats.
-pub fn extract_todos_from_message_content(message_content: &Value) -> Option<Vec<TodoItem>> {
+/// Dispatches to the correct parser based on agent flavor.
+pub fn extract_todos_from_message_content(
+    message_content: &Value,
+    flavor: Option<AgentFlavor>,
+) -> Option<Vec<TodoItem>> {
     let record = unwrap_role_wrapped_record_envelope(message_content)?;
 
     if record.role != "agent" && record.role != "assistant" {
@@ -18,9 +23,17 @@ pub fn extract_todos_from_message_content(message_content: &Value) -> Option<Vec
     }
     let content_type = content.get("type").and_then(|v| v.as_str())?;
 
-    extract_from_claude_output(content, content_type)
-        .or_else(|| extract_from_codex_message(content, content_type))
-        .or_else(|| extract_from_acp_message(content, content_type))
+    match flavor {
+        Some(AgentFlavor::Claude) => extract_from_claude_output(content, content_type),
+        Some(AgentFlavor::Codex) => extract_from_codex_message(content, content_type)
+            .or_else(|| extract_from_acp_plan(content, content_type)),
+        _ => {
+            warn!("extract_todos called without flavor, falling back to brute-force");
+            extract_from_claude_output(content, content_type)
+                .or_else(|| extract_from_codex_message(content, content_type))
+                .or_else(|| extract_from_acp_plan(content, content_type))
+        }
+    }
 }
 
 fn extract_from_claude_output(content: &Value, content_type: &str) -> Option<Vec<TodoItem>> {
@@ -54,7 +67,6 @@ fn extract_from_claude_output(content: &Value, content_type: &str) -> Option<Vec
         if !is_object(input) {
             continue;
         }
-        // PLACEHOLDER_TODOS_CONTINUE
         if let Some(todos) = input.get("todos")
             && let Ok(items) = serde_json::from_value::<Vec<TodoItem>>(todos.clone())
         {
@@ -87,7 +99,7 @@ fn extract_from_codex_message(content: &Value, content_type: &str) -> Option<Vec
     serde_json::from_value::<Vec<TodoItem>>(todos.clone()).ok()
 }
 
-fn extract_from_acp_message(content: &Value, content_type: &str) -> Option<Vec<TodoItem>> {
+fn extract_from_acp_plan(content: &Value, content_type: &str) -> Option<Vec<TodoItem>> {
     if content_type != "codex" {
         return None;
     }

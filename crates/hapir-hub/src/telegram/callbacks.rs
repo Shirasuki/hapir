@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tracing::error;
 
-use hapir_shared::schemas::Session;
+use hapir_shared::common::session::Session;
 
 use crate::sync::SyncEngine;
 

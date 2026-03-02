@@ -1,8 +1,9 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::SystemTime;
 
+use hapir_shared::cli::gateway::RpcCommonResponse;
+use hapir_shared::common::utils::now_millis;
 use tracing::{debug, info};
 
 use crate::agent::session_base::AgentSessionBase;
@@ -29,10 +30,7 @@ impl CodexSession {
                 let tool_name = req.kind.clone().unwrap_or_default();
                 let arguments = req.raw_input.clone().unwrap_or(serde_json::json!({}));
                 let key = req.id.clone();
-                let requested_at = SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as f64;
+                let requested_at = now_millis() as f64;
 
                 tokio::spawn(async move {
                     let _ = ws
@@ -73,7 +71,7 @@ impl RpcHandlerGroup<WsSessionClient> for CodexSession {
                 async move {
                     info!("[runCodex] switch RPC received, requesting mode switch");
                     notify.notify_one();
-                    serde_json::json!({"ok": true})
+                    RpcCommonResponse::success()
                 }
             })
             .await;
@@ -89,7 +87,7 @@ impl RpcHandlerGroup<WsSessionClient> for CodexSession {
                         let _ = b.cancel_prompt(&sid).await;
                     }
                     sb.on_thinking_change(false).await;
-                    serde_json::json!({"ok": true})
+                    RpcCommonResponse::success()
                 }
             })
             .await;
@@ -143,10 +141,7 @@ impl RpcHandlerGroup<WsSessionClient> for CodexSession {
 
                     let id_for_state = id.clone();
                     let status = if approved { "approved" } else { "denied" };
-                    let completed_at = SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as f64;
+                    let completed_at = now_millis() as f64;
 
                     let _ = sb
                         .ws_client
@@ -181,7 +176,7 @@ impl RpcHandlerGroup<WsSessionClient> for CodexSession {
                         })
                         .await;
 
-                    serde_json::json!({"ok": true})
+                    RpcCommonResponse::success()
                 }
             })
             .await;

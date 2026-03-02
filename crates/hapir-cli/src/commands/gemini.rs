@@ -1,4 +1,3 @@
-use hapir_shared::modes::SessionMode;
 use crate::commands::common;
 use crate::modules::gemini;
 use crate::modules::gemini::run::GeminiStartOptions;
@@ -6,7 +5,8 @@ use anyhow::Result;
 use clap::Parser;
 use gemini::run::run_gemini;
 use hapir_infra::config::CliConfiguration;
-use hapir_shared::schemas::SessionStartedBy;
+use hapir_shared::common::modes::SessionMode;
+use hapir_shared::common::metadata::SessionStartedBy;
 use std::env;
 use tracing::debug;
 

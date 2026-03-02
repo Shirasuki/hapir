@@ -1,14 +1,17 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     Json, Router,
     extract::{Extension, Path, State},
-    http::StatusCode,
     routing::{get, post},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
 
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
+use hapir_shared::frontend::response_types::{MachinesData, PathsExistsData};
+
+use crate::sync::machine_cache::Machine;
+use crate::sync::rpc_gateway::SpawnSessionResult;
 use crate::web::AppState;
 use crate::web::middleware::auth::AuthContext;
 
@@ -19,15 +22,44 @@ pub fn router() -> Router<AppState> {
         .route("/machines/{id}/paths/exists", post(paths_exists))
 }
 
+async fn get_active_machine(
+    state: &AppState,
+    auth: &AuthContext,
+    machine_id: &str,
+) -> Result<Machine, ApiError> {
+    let machine = state
+        .sync_engine
+        .get_machine(machine_id)
+        .await
+        .ok_or_else(|| ApiError::NotFound("Machine not found".into()))?;
+    if machine.namespace != auth.namespace {
+        return Err(ApiError::AccessDenied("Machine access denied".into()));
+    }
+    if !machine.active {
+        return Err(ApiError::Conflict("Machine is offline".into()));
+    }
+    Ok(machine)
+}
+
 async fn list_machines(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<MachinesData>>, ApiError> {
     let machines = state
         .sync_engine
         .get_online_machines_by_namespace(&auth.namespace)
         .await;
-    (StatusCode::OK, Json(json!({ "machines": machines })))
+    let machines_val: Vec<serde_json::Value> = machines
+        .iter()
+        .filter_map(|m| {
+            serde_json::to_value(m)
+                .map_err(|e| tracing::error!("Failed to serialize machine: {e}"))
+                .ok()
+        })
+        .collect();
+    Ok(Json(ApiResponse::ok(MachinesData {
+        machines: machines_val,
+    })))
 }
 
 #[derive(Deserialize)]
@@ -46,51 +78,21 @@ async fn spawn_machine(
     Extension(auth): Extension<AuthContext>,
     Path(machine_id): Path<String>,
     Json(body): Json<SpawnBody>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<SpawnSessionResult>>, ApiError> {
     if body.directory.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid body"})),
-        );
+        return Err(ApiError::BadRequest("Invalid body".into()));
     }
 
-    // Verify machine exists and belongs to this namespace
-    let machine = match state.sync_engine.get_machine(&machine_id).await {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Machine not found"})),
-            );
-        }
-    };
-    if machine.namespace != auth.namespace {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Machine access denied"})),
-        );
-    }
-    if !machine.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"error": "Machine is offline"})),
-        );
-    }
+    get_active_machine(&state, &auth, &machine_id).await?;
 
     let agent = body.agent.as_deref().unwrap_or("claude").to_lowercase();
     if !matches!(agent.as_str(), "claude" | "codex" | "gemini" | "opencode") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid agent"})),
-        );
+        return Err(ApiError::BadRequest("Invalid agent".into()));
     }
     if let Some(ref st) = body.session_type
         && !matches!(st.as_str(), "simple" | "worktree")
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid sessionType"})),
-        );
+        return Err(ApiError::BadRequest("Invalid sessionType".into()));
     }
 
     let result = state
@@ -108,25 +110,18 @@ async fn spawn_machine(
         .await;
 
     match result {
-        Ok(spawn_result) => {
-            let val =
-                serde_json::to_value(&spawn_result).unwrap_or_else(|_| json!({"type": "error"}));
-            (StatusCode::OK, Json(val))
-        }
+        Ok(spawn_result) => Ok(Json(ApiResponse::ok(spawn_result))),
         Err(e) => {
             let message = if e.contains("not registered") {
-                "Machine is offline or not connected. Please check that the runner is running on the target machine."
+                "Machine is offline or not connected. Please check that the runner is running on the target machine.".to_string()
             } else if e.contains("timed out") {
-                "Request timed out. The machine may be busy or unreachable."
+                "Request timed out. The machine may be busy or unreachable.".to_string()
             } else if e.contains("connection lost") || e.contains("send failed") {
-                "Lost connection to the machine. Please check the runner status."
+                "Lost connection to the machine. Please check the runner status.".to_string()
             } else {
-                &e
+                e
             };
-            (
-                StatusCode::OK,
-                Json(json!({"type": "error", "message": message})),
-            )
+            Err(ApiError::ServiceUnavailable(message))
         }
     }
 }
@@ -141,59 +136,33 @@ async fn paths_exists(
     Extension(auth): Extension<AuthContext>,
     Path(machine_id): Path<String>,
     body: Result<Json<PathsExistsBody>, axum::extract::rejection::JsonRejection>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<PathsExistsData>>, ApiError> {
     let body = match body {
         Ok(Json(b)) => b,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Invalid body"})),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
     if body.paths.len() > 1000 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid body"})),
-        );
+        return Err(ApiError::BadRequest("Invalid body".into()));
     }
 
-    // Verify machine exists and belongs to this namespace
-    let machine = match state.sync_engine.get_machine(&machine_id).await {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Machine not found"})),
-            );
-        }
-    };
-    if machine.namespace != auth.namespace {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Machine access denied"})),
-        );
-    }
-    if !machine.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"error": "Machine is offline"})),
-        );
-    }
+    get_active_machine(&state, &auth, &machine_id).await?;
 
-    // Deduplicate and filter empty paths
-    let unique_paths: Vec<String> = {
-        let mut seen = HashSet::new();
-        body.paths
-            .into_iter()
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty() && seen.insert(p.clone()))
-            .collect()
-    };
+    let mut seen = HashSet::new();
+    let unique_paths: Vec<String> = body.paths
+        .into_iter()
+        .filter_map(|p| {
+            let p = p.trim().to_string();
+            (!p.is_empty() && seen.insert(p.clone())).then_some(p)
+        })
+        .collect();
 
     if unique_paths.is_empty() {
-        return (StatusCode::OK, Json(json!({ "exists": {} })));
+        return Ok(Json(ApiResponse::ok(PathsExistsData {
+            exists: HashMap::new(),
+        })));
     }
 
     match state
@@ -201,10 +170,7 @@ async fn paths_exists(
         .check_paths_exist(&machine_id, &unique_paths)
         .await
     {
-        Ok(exists) => (StatusCode::OK, Json(json!({ "exists": exists }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        ),
+        Ok(exists) => Ok(Json(ApiResponse::ok(PathsExistsData { exists }))),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }

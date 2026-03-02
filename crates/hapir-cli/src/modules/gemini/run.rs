@@ -3,8 +3,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 
-use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
-use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
+use hapir_shared::common::modes::{AgentFlavor, PermissionMode, SessionMode};
+use hapir_shared::common::metadata::SessionStartedBy as SharedStartedBy;
 
 use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
 use crate::agent::common_rpc::{ApplyConfigFn, CommonRpc, CommonRpcConfig, OnKillFn};
@@ -17,10 +17,10 @@ use hapir_infra::rpc::{EventRegistry, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::utils::terminal::restore_terminal_state;
 
-use super::{GeminiMode, compute_mode_hash};
 use super::local_launcher::gemini_local_launcher;
 use super::remote_launcher::gemini_remote_launcher;
 use super::session::GeminiSession;
+use super::{GeminiMode, compute_mode_hash};
 use crate::terminal::{TerminalManager, TerminalManagerOptions};
 
 pub struct GeminiStartOptions {
@@ -88,19 +88,18 @@ pub async fn run_gemini(
         None,
     ));
 
-    let apply_config: Arc<ApplyConfigFn<GeminiMode>> =
-        Arc::new(Box::new(|m, params| {
-            if let Some(pm) = params.get("permissionMode") {
-                if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
-                    debug!("[runGemini] Permission mode changed to: {:?}", mode);
-                    m.permission_mode = Some(mode);
-                }
+    let apply_config: Arc<ApplyConfigFn<GeminiMode>> = Arc::new(Box::new(|m, params| {
+        if let Some(pm) = params.get("permissionMode") {
+            if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
+                debug!("[runGemini] Permission mode changed to: {:?}", mode);
+                m.permission_mode = Some(mode);
             }
-            if let Some(model) = params.get("model").and_then(|v| v.as_str()) {
-                debug!("[runGemini] Model changed to: {}", model);
-                m.model = Some(model.to_string());
-            }
-        }));
+        }
+        if let Some(model) = params.get("model").and_then(|v| v.as_str()) {
+            debug!("[runGemini] Model changed to: {}", model);
+            m.model = Some(model.to_string());
+        }
+    }));
 
     let backend_for_kill = backend.clone();
     let on_kill: OnKillFn = Arc::new(move || {

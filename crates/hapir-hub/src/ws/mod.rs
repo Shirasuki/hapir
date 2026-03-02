@@ -16,11 +16,10 @@ use axum::{
 };
 use connection_manager::{ConnectionManager, WsConnType, WsConnection, WsOutMessage};
 use futures::{SinkExt, StreamExt};
-use hapir_shared::ws_protocol::WsMessage;
+use hapir_shared::cli::ws_protocol::WsMessage;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
-use std::time::SystemTime;
 use terminal_registry::TerminalRegistry;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::unbounded_channel;
@@ -292,10 +291,7 @@ async fn handle_cli_ws(
     }
     if let Some(ref sid) = session_id {
         info!(conn_id = %conn_id, session_id = %sid, "Session WebSocket 已断开");
-        let now = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let now = hapir_shared::common::utils::now_millis();
         state.sync_engine.handle_session_end(sid, now).await;
     }
     if machine_id.is_none() && session_id.is_none() {

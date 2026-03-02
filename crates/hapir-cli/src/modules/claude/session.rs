@@ -1,18 +1,18 @@
+use crate::agent::session_base::AgentSessionBase;
+use hapir_infra::rpc::{RpcHandlerGroup, RpcRegistry};
+use hapir_infra::ws::session_client::WsSessionClient;
+use hapir_shared::common::modes::SessionMode;
+use hapir_shared::cli::gateway::RpcCommonResponse;
+use hapir_shared::common::metadata::SessionStartedBy;
+use hapir_shared::common::utils::now_millis;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::SystemTime;
-use crate::agent::common_rpc::register_switch_handler;
-use crate::agent::session_base::AgentSessionBase;
-use hapir_infra::rpc::{RpcHandlerGroup, RpcRegistry};
-use hapir_infra::ws::session_client::WsSessionClient;
-use hapir_shared::modes::SessionMode;
-use hapir_shared::schemas::SessionStartedBy;
-use serde_json::Value;
 use tokio::sync::Mutex;
-use tracing::debug;
+use tracing::{debug, info};
 
 type PermissionResponseSender = tokio::sync::oneshot::Sender<(bool, Option<serde_json::Value>)>;
 
@@ -98,7 +98,16 @@ impl<Mode: Clone + Send + 'static> RpcHandlerGroup<WsSessionClient> for ClaudeSe
         ws: &'a WsSessionClient,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
-            register_switch_handler(ws, "runClaude", self.base.switch_notify.clone()).await;
+            let switch_notify = self.base.switch_notify.clone();
+            ws.register_rpc("switch", move |_params| {
+                let notify = switch_notify.clone();
+                async move {
+                    info!("[runClaude] switch RPC received, requesting mode switch");
+                    notify.notify_one();
+                    RpcCommonResponse::success()
+                }
+            })
+            .await;
 
             let pending = self.pending_permissions.clone();
             let base_ws = self.base.ws_client.clone();
@@ -120,10 +129,7 @@ impl<Mode: Clone + Send + 'static> RpcHandlerGroup<WsSessionClient> for ClaudeSe
 
                         let id_clone = id.to_string();
                         let status = if approved { "approved" } else { "denied" };
-                        let completed_at = SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as f64;
+                        let completed_at = now_millis() as f64;
 
                         let _ = ws
                             .update_agent_state(move |mut state| {
@@ -159,7 +165,7 @@ impl<Mode: Clone + Send + 'static> RpcHandlerGroup<WsSessionClient> for ClaudeSe
                             .await;
                     }
 
-                    serde_json::json!({"ok": true})
+                    RpcCommonResponse::success()
                 }
             })
             .await;
@@ -189,7 +195,7 @@ impl<Mode: Clone + Send + 'static> RpcHandlerGroup<WsSessionClient> for ClaudeSe
                     }
                     pending.lock().await.clear();
                     base.on_thinking_change(false).await;
-                    serde_json::json!({"ok": true})
+                    RpcCommonResponse::success()
                 }
             })
             .await;

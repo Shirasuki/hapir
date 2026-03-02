@@ -1,3 +1,6 @@
+use hapir_shared::common::agent_state::AgentState;
+use hapir_shared::common::metadata::HapirSessionMetadata;
+use hapir_shared::common::todo::TodoItem;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
@@ -8,11 +11,11 @@ pub struct StoredSession {
     pub machine_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
-    pub metadata: Option<Value>,
+    pub metadata: Option<HapirSessionMetadata>,
     pub metadata_version: i64,
-    pub agent_state: Option<Value>,
+    pub agent_state: Option<AgentState>,
     pub agent_state_version: i64,
-    pub todos: Option<Value>,
+    pub todos: Option<Vec<TodoItem>>,
     pub todos_updated_at: Option<i64>,
     pub active: bool,
     pub active_at: Option<i64>,

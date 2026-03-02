@@ -1,11 +1,5 @@
-pub mod i18n;
-pub mod messages;
-pub mod modes;
-pub mod rpc;
-pub mod schemas;
-pub mod session;
-pub mod socket;
-pub mod utils;
-pub mod version;
-pub mod voice;
-pub mod ws_protocol;
+pub mod cli;
+pub mod common;
+pub mod frontend;
+pub mod hub;
+pub mod runner;

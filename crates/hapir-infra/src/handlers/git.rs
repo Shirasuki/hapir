@@ -6,8 +6,8 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::debug;
 
-use hapir_shared::rpc::bash::RpcCommandResponse;
-use hapir_shared::rpc::git::{
+use hapir_shared::frontend::rpc::bash::RpcCommandResponse;
+use hapir_shared::frontend::rpc::git::{
     RpcGitDiffFileRequest, RpcGitDiffNumstatRequest, RpcGitStatusRequest,
 };
 
@@ -29,13 +29,13 @@ async fn run_git_command(args: &[&str], cwd: &str, timeout_ms: u64) -> Value {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             if output.status.success() {
-                response.success = true;
+                response.ok = true;
                 response.stdout = Some(stdout);
                 response.stderr = Some(stderr);
                 response.exit_code = Some(code);
                 response.error = None;
             } else {
-                response.success = false;
+                response.ok = false;
                 response.stdout = Some(stdout);
                 response.stderr = Some(stderr.clone());
                 response.exit_code = Some(code);
@@ -43,14 +43,14 @@ async fn run_git_command(args: &[&str], cwd: &str, timeout_ms: u64) -> Value {
             }
         }
         Ok(Err(e)) => {
-            response.success = false;
+            response.ok = false;
             response.stdout = Some(String::new());
             response.stderr = Some(e.to_string());
             response.exit_code = Some(1);
             response.error = Some(e.to_string());
         }
         Err(_) => {
-            response.success = false;
+            response.ok = false;
             response.stdout = Some(String::new());
             response.stderr = Some(String::new());
             response.exit_code = Some(-1);

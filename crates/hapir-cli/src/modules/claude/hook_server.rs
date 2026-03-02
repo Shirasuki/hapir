@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
-use axum::Router;
 use rand::Rng;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tracing::debug;
 
 use hapir_infra::ws::session_client::WsSessionClient;
-use hapir_shared::modes::SessionMode;
-use hapir_shared::session::{
+use hapir_shared::common::modes::SessionMode;
+use hapir_shared::common::session_messages::{
     AgentContent, ClaudeMessageBody, ClaudeOutputData, MessageMeta, RoleWrappedMessage,
 };
 

@@ -2,8 +2,8 @@ import type {
     DecryptedMessage as ProtocolDecryptedMessage,
     Session,
     SessionSummary,
+    SessionWorktreeMetadata,
     SyncEvent as ProtocolSyncEvent,
-    WorktreeMetadata
 } from './generated'
 
 export type {
@@ -11,12 +11,20 @@ export type {
     AttachmentMetadata,
     ModelMode,
     PermissionMode,
+    RpcCommandResponse as GitCommandResponse,
+    RpcDeleteUploadResponse as DeleteUploadResponse,
+    RpcDirectoryEntry as DirectoryEntry,
+    RpcListDirectoryResponse as ListDirectoryResponse,
+    RpcReadFileResponse as FileReadResponse,
+    RpcUploadFileResponse as UploadFileResponse,
     Session,
     SessionSummary,
     SessionSummaryMetadata,
+    SessionWorktreeMetadata,
     TodoItem,
-    WorktreeMetadata
 } from './generated'
+
+export type WorktreeMetadata = SessionWorktreeMetadata
 
 export type SessionMetadataSummary = {
     path: string
@@ -28,7 +36,7 @@ export type SessionMetadataSummary = {
     machineId?: string
     tools?: string[]
     flavor?: string | null
-    worktree?: WorktreeMetadata
+    worktree?: SessionWorktreeMetadata
 }
 
 export type MessageStatus = 'sending' | 'sent' | 'failed'
@@ -74,17 +82,7 @@ export type MessagesResponse = {
 export type MachinesResponse = { machines: Machine[] }
 export type MachinePathsExistsResponse = { exists: Record<string, boolean> }
 
-export type SpawnResponse =
-    | { type: 'success'; sessionId: string }
-    | { type: 'error'; message: string }
-
-export type GitCommandResponse = {
-    success: boolean
-    stdout?: string
-    stderr?: string
-    exitCode?: number
-    error?: string
-}
+export type SpawnResponse = { type: 'success'; sessionId: string }
 
 export type FileSearchItem = {
     fileName: string
@@ -94,39 +92,7 @@ export type FileSearchItem = {
 }
 
 export type FileSearchResponse = {
-    success: boolean
-    files?: FileSearchItem[]
-    error?: string
-}
-
-export type DirectoryEntry = {
-    name: string
-    type: 'file' | 'directory' | 'other'
-    size?: number
-    modified?: number
-}
-
-export type ListDirectoryResponse = {
-    success: boolean
-    entries?: DirectoryEntry[]
-    error?: string
-}
-
-export type FileReadResponse = {
-    success: boolean
-    content?: string
-    error?: string
-}
-
-export type UploadFileResponse = {
-    success: boolean
-    path?: string
-    error?: string
-}
-
-export type DeleteUploadResponse = {
-    success: boolean
-    error?: string
+    files: FileSearchItem[]
 }
 
 export type GitFileStatus = {
@@ -152,12 +118,12 @@ export type SlashCommand = {
     name: string
     description?: string
     source: 'builtin' | 'user' | 'plugin'
-    content?: string  // Expanded content for Codex user prompts
+    content?: string
     pluginName?: string
 }
 
 export type SlashCommandsResponse = {
-    success: boolean
+    ok: boolean
     commands?: SlashCommand[]
     error?: string
 }
@@ -168,7 +134,7 @@ export type SkillSummary = {
 }
 
 export type SkillsResponse = {
-    success: boolean
+    ok: boolean
     skills?: SkillSummary[]
     error?: string
 }

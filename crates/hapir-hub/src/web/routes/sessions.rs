@@ -1,18 +1,20 @@
 use axum::{
     Extension, Json, Router,
     extract::{Path, State},
-    http::StatusCode,
     routing::{delete, get, patch, post},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::cmp::Ordering;
 
-use hapir_shared::modes::{
+use hapir_shared::common::modes::{
     AgentFlavor, ModelMode, PermissionMode, is_model_mode_allowed_for_flavor,
     is_permission_mode_allowed_for_flavor, permission_modes_for_flavor,
 };
-use hapir_shared::session::to_session_summary;
+use hapir_shared::common::summary::to_session_summary;
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
+use hapir_shared::frontend::response_types::{ResumeData, SessionData, SessionsData};
+use hapir_shared::frontend::rpc::uploads::{RpcDeleteUploadResponse, RpcUploadFileResponse};
 
 use crate::sync::{ResumeSessionErrorCode, ResumeSessionResult};
 use crate::web::AppState;
@@ -36,7 +38,7 @@ pub fn router() -> Router<AppState> {
         .route("/sessions/{id}/upload/delete", post(delete_upload_file))
 }
 
-fn pending_count(session: &hapir_shared::schemas::Session) -> usize {
+fn pending_count(session: &hapir_shared::common::session::Session) -> usize {
     session
         .agent_state
         .as_ref()
@@ -45,25 +47,20 @@ fn pending_count(session: &hapir_shared::schemas::Session) -> usize {
         .unwrap_or(0)
 }
 
-fn parse_flavor(session: &hapir_shared::schemas::Session) -> Option<AgentFlavor> {
-    session
-        .metadata
-        .as_ref()
-        .and_then(|m| m.flavor.as_deref())
-        .and_then(|f| serde_json::from_value(Value::String(f.to_string())).ok())
+fn parse_flavor(session: &hapir_shared::common::session::Session) -> Option<AgentFlavor> {
+    session.metadata.as_ref().and_then(|m| m.flavor)
 }
 
 async fn list_sessions(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<SessionsData>>, ApiError> {
     let mut sessions = state
         .sync_engine
         .get_sessions_by_namespace(&auth.namespace)
         .await;
 
     sessions.sort_by(|a, b| {
-        // Active sessions first
         if a.active != b.active {
             return if a.active {
                 Ordering::Less
@@ -71,7 +68,6 @@ async fn list_sessions(
                 Ordering::Greater
             };
         }
-        // Within active sessions, sort by pending requests count descending
         if a.active {
             let a_pending = pending_count(a);
             let b_pending = pending_count(b);
@@ -79,81 +75,54 @@ async fn list_sessions(
                 return b_pending.cmp(&a_pending);
             }
         }
-        // Then by updatedAt descending
         b.updated_at
             .partial_cmp(&a.updated_at)
             .unwrap_or(Ordering::Equal)
     });
 
-    let summaries: Vec<_> = sessions.iter().map(to_session_summary).collect();
-    (StatusCode::OK, Json(json!({ "sessions": summaries })))
+    let summaries = sessions.iter().map(to_session_summary).collect();
+    Ok(Json(ApiResponse::ok(SessionsData {
+        sessions: summaries,
+    })))
 }
 
 async fn get_session(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    match state
+) -> Result<Json<ApiResponse<SessionData>>, ApiError> {
+    let (_session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok((_session_id, session)) => (StatusCode::OK, Json(json!({ "session": session }))),
-        Err("access-denied") => (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "Session access denied" })),
-        ),
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Session not found" })),
-        ),
-    }
+        .await?;
+
+    Ok(Json(ApiResponse::ok(SessionData { session })))
 }
 
 async fn delete_session(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session) = match state
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Cannot delete active session. Archive it first." })),
-        );
+        return Err(ApiError::Conflict(
+            "Cannot delete active session. Archive it first.".into(),
+        ));
     }
 
     match state.sync_engine.delete_session(&session_id).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Ok(()) => Ok(Json(ApiResponse::success())),
         Err(e) => {
             let message = e.to_string();
             if message.contains("active") {
-                (StatusCode::CONFLICT, Json(json!({ "error": message })))
+                Err(ApiError::Conflict(message))
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": message })),
-                )
+                Err(ApiError::Internal(message))
             }
         }
     }
@@ -169,59 +138,39 @@ async fn update_session(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<RenameBody>>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<()>>, ApiError> {
     let Json(body) = match body {
         Some(b) => b,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid body: name is required" })),
-            );
+            return Err(ApiError::BadRequest(
+                "Invalid body: name is required".into(),
+            ));
         }
     };
 
     if body.name.is_empty() || body.name.len() > 255 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Invalid body: name is required" })),
-        );
+        return Err(ApiError::BadRequest(
+            "Invalid body: name is required".into(),
+        ));
     }
 
-    let session_id = match state
+    let (session_id, _session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok((sid, _session)) => sid,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     match state
         .sync_engine
         .rename_session(&session_id, &body.name)
         .await
     {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Ok(()) => Ok(Json(ApiResponse::success())),
         Err(e) => {
             let message = e.to_string();
             if message.contains("concurrently") || message.contains("version") {
-                (StatusCode::CONFLICT, Json(json!({ "error": message })))
+                Err(ApiError::Conflict(message))
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": message })),
-                )
+                Err(ApiError::Internal(message))
             }
         }
     }
@@ -231,47 +180,30 @@ async fn resume_session(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    // Verify the session exists and belongs to the namespace first
-    if let Err(reason) = state
+) -> Result<Json<ApiResponse<ResumeData>>, ApiError> {
+    state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        return match reason {
-            "access-denied" => (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            ),
-            _ => (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            ),
-        };
-    }
+        .await?;
 
     let result = state.sync_engine.resume_session(&id, &auth.namespace).await;
     match result {
-        ResumeSessionResult::Success { session_id } => (
-            StatusCode::OK,
-            Json(json!({ "type": "success", "sessionId": session_id })),
-        ),
-        ResumeSessionResult::Error { message, code } => {
-            let status = match code {
-                ResumeSessionErrorCode::NoMachineOnline => StatusCode::SERVICE_UNAVAILABLE,
-                ResumeSessionErrorCode::AccessDenied => StatusCode::FORBIDDEN,
-                ResumeSessionErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            let code_str = match code {
-                ResumeSessionErrorCode::SessionNotFound => "session_not_found",
-                ResumeSessionErrorCode::AccessDenied => "access_denied",
-                ResumeSessionErrorCode::NoMachineOnline => "no_machine_online",
-                ResumeSessionErrorCode::ResumeUnavailable => "resume_unavailable",
-                ResumeSessionErrorCode::ResumeFailed => "resume_failed",
-            };
-            (status, Json(json!({ "error": message, "code": code_str })))
+        ResumeSessionResult::Success { session_id } => {
+            Ok(Json(ApiResponse::ok(ResumeData { session_id })))
         }
+        ResumeSessionResult::Error { message, code } => match code {
+            ResumeSessionErrorCode::NoMachineOnline => Err(ApiError::ServiceUnavailable(message)),
+            ResumeSessionErrorCode::AccessDenied => Err(ApiError::AccessDenied(message)),
+            ResumeSessionErrorCode::SessionNotFound => Err(ApiError::NotFound(message)),
+            _ => {
+                let code_str = match code {
+                    ResumeSessionErrorCode::ResumeUnavailable => "resume_unavailable",
+                    ResumeSessionErrorCode::ResumeFailed => "resume_failed",
+                    _ => "unknown",
+                };
+                Err(ApiError::Internal(format!("{message} (code: {code_str})")))
+            }
+        },
     }
 }
 
@@ -279,40 +211,19 @@ async fn archive_session(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session) = match state
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
     match state.sync_engine.archive_session(&session_id).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(()) => Ok(Json(ApiResponse::success())),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
@@ -320,40 +231,19 @@ async fn abort_session(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session) = match state
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
     match state.sync_engine.abort_session(&session_id).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(()) => Ok(Json(ApiResponse::success())),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
@@ -367,32 +257,14 @@ async fn switch_session(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<SwitchBody>>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session) = match state
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
     let to = body
@@ -400,11 +272,8 @@ async fn switch_session(
         .unwrap_or_else(|| "remote".to_string());
 
     match state.sync_engine.switch_session(&session_id, &to).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(()) => Ok(Json(ApiResponse::success())),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
@@ -418,59 +287,36 @@ async fn set_permission_mode(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<PermissionModeBody>>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<()>>, ApiError> {
     let Json(body) = match body {
         Some(b) => b,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid body" })),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
-    let (session_id, session) = match state
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
     let flavor = parse_flavor(&session);
 
     let allowed_modes = permission_modes_for_flavor(flavor);
     if allowed_modes.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Permission mode not supported for session flavor" })),
-        );
+        return Err(ApiError::BadRequest(
+            "Permission mode not supported for session flavor".into(),
+        ));
     }
 
     if !is_permission_mode_allowed_for_flavor(body.mode, flavor) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Invalid permission mode for session flavor" })),
-        );
+        return Err(ApiError::BadRequest(
+            "Invalid permission mode for session flavor".into(),
+        ));
     }
 
     match state
@@ -478,11 +324,8 @@ async fn set_permission_mode(
         .apply_session_config(&session_id, Some(body.mode), None)
         .await
     {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(()) => Ok(Json(ApiResponse::success())),
+        Err(e) => Err(ApiError::Conflict(e.to_string())),
     }
 }
 
@@ -496,51 +339,29 @@ async fn set_model(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<ModelModeBody>>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<()>>, ApiError> {
     let Json(body) = match body {
         Some(b) => b,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid body" })),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
-    let (session_id, session) = match state
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
     let flavor = parse_flavor(&session);
 
     if !is_model_mode_allowed_for_flavor(body.model, flavor) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Model mode is only supported for Claude sessions" })),
-        );
+        return Err(ApiError::BadRequest(
+            "Model mode is only supported for Claude sessions".into(),
+        ));
     }
 
     match state
@@ -548,46 +369,28 @@ async fn set_model(
         .apply_session_config(&session_id, None, Some(body.model))
         .await
     {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(()) => Ok(Json(ApiResponse::success())),
+        Err(e) => Err(ApiError::Conflict(e.to_string())),
     }
 }
 
-// ---------- slash-commands & skills ----------
-
+// slash-commands & skills: RPC returns Value, wrap as-is
 async fn list_slash_commands(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session) = match state
+) -> Result<Json<ApiResponse<Value>>, ApiError> {
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     let agent = session
         .metadata
         .as_ref()
-        .and_then(|m| m.flavor.as_deref())
-        .unwrap_or("claude")
+        .and_then(|m| m.flavor)
+        .unwrap_or(AgentFlavor::Claude)
+        .as_str()
         .to_string();
 
     match state
@@ -595,11 +398,8 @@ async fn list_slash_commands(
         .list_slash_commands(&session_id, &agent)
         .await
     {
-        Ok(val) => (StatusCode::OK, Json(val)),
-        Err(e) => (
-            StatusCode::OK,
-            Json(json!({ "success": false, "error": e.to_string() })),
-        ),
+        Ok(val) => Ok(Json(ApiResponse::ok(val))),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
@@ -607,48 +407,28 @@ async fn list_skills(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session) = match state
+) -> Result<Json<ApiResponse<Value>>, ApiError> {
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     let agent = session
         .metadata
         .as_ref()
-        .and_then(|m| m.flavor.as_deref())
-        .unwrap_or("claude")
+        .and_then(|m| m.flavor)
+        .unwrap_or(AgentFlavor::Claude)
+        .as_str()
         .to_string();
 
     match state.sync_engine.list_skills(&session_id, &agent).await {
-        Ok(val) => (StatusCode::OK, Json(val)),
-        Err(e) => (
-            StatusCode::OK,
-            Json(json!({ "success": false, "error": e.to_string() })),
-        ),
+        Ok(val) => Ok(Json(ApiResponse::ok(val))),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
-// ---------- upload ----------
-
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 
-/// Estimate decoded size from base64 string length, accounting for padding.
 fn estimate_base64_bytes(b64: &str) -> usize {
     let len = b64.len();
     if len == 0 {
@@ -677,14 +457,11 @@ async fn upload_file(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<UploadBody>>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<RpcUploadFileResponse>>, ApiError> {
     let Json(body) = match body {
         Some(b) => b,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid body" })),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
@@ -693,60 +470,31 @@ async fn upload_file(
         || body.content.is_empty()
         || body.mime_type.is_empty()
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Invalid body" })),
-        );
+        return Err(ApiError::BadRequest("Invalid body".into()));
     }
 
     if estimate_base64_bytes(&body.content) > MAX_UPLOAD_BYTES {
-        return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({ "success": false, "error": "File too large (max 50MB)" })),
-        );
+        return Err(ApiError::PayloadTooLarge(
+            "File too large (max 50MB)".into(),
+        ));
     }
 
-    let (session_id, session) = match state
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
-    match state
+    let resp = state
         .sync_engine
         .upload_file(&session_id, &body.filename, &body.content, &body.mime_type)
         .await
-    {
-        Ok(resp) => {
-            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({ "success": false }));
-            (StatusCode::OK, Json(val))
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "success": false, "error": e.to_string() })),
-        ),
-    }
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(ApiResponse::ok(resp)))
 }
 
 #[derive(Deserialize)]
@@ -759,63 +507,32 @@ async fn delete_upload_file(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<UploadDeleteBody>>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<RpcDeleteUploadResponse>>, ApiError> {
     let Json(body) = match body {
         Some(b) => b,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid body" })),
-            );
+            return Err(ApiError::BadRequest("Invalid body".into()));
         }
     };
 
     if body.path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Invalid body" })),
-        );
+        return Err(ApiError::BadRequest("Invalid body".into()));
     }
 
-    let (session_id, session) = match state
+    let (session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok(pair) => pair,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Session access denied" })),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Session not found" })),
-            );
-        }
-    };
+        .await?;
 
     if !session.active {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "Session is inactive" })),
-        );
+        return Err(ApiError::Conflict("Session is inactive".into()));
     }
 
-    match state
+    let resp = state
         .sync_engine
         .delete_upload_file(&session_id, &body.path)
         .await
-    {
-        Ok(resp) => {
-            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({ "success": false }));
-            (StatusCode::OK, Json(val))
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "success": false, "error": e.to_string() })),
-        ),
-    }
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(ApiResponse::ok(resp)))
 }

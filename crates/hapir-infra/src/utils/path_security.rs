@@ -72,7 +72,7 @@ mod tests {
         let wd = test_working_dir();
         let result = validate_path("src/main.rs", wd);
         assert!(result.is_ok());
-        let expected = PathBuf::from(wd).join("../../../../src").join("main.rs");
+        let expected = PathBuf::from(wd).join("src").join("main.rs");
         assert_eq!(result.unwrap(), expected);
     }
 

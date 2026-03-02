@@ -7,7 +7,11 @@ use tracing::{debug, warn};
 use super::super::connection_manager::{ConnectionManager, WsConnType};
 use super::super::terminal_registry::TerminalRegistry;
 use crate::sync::SyncEngine;
-use hapir_shared::ws_protocol::WsMessage;
+use hapir_shared::cli::socket::{
+    TerminalClosePayload, TerminalErrorPayload, TerminalOpenPayload, TerminalResizePayload,
+    TerminalWritePayload,
+};
+use hapir_shared::cli::ws_protocol::WsMessage;
 
 /// Check if a CLI socket is still connected and belongs to the expected namespace.
 async fn resolve_cli_socket(
@@ -15,9 +19,12 @@ async fn resolve_cli_socket(
     cli_socket_id: &str,
     namespace: &str,
 ) -> bool {
-    // Check the connection exists, is CLI type, and has matching namespace
-    let conns = conn_mgr.connections_read().await;
-    matches!(conns.get(cli_socket_id), Some(conn) if conn.conn_type == WsConnType::Cli && conn.namespace == namespace)
+    conn_mgr
+        .with_connection(cli_socket_id, |conn| {
+            conn.conn_type == WsConnType::Cli && conn.namespace == namespace
+        })
+        .await
+        .unwrap_or(false)
 }
 
 /// Process an incoming WebSocket event from a terminal (webapp) connection.
@@ -107,9 +114,12 @@ async fn handle_terminal_create(
         warn!(session_id, namespace, active = ?session.as_ref().map(|s| s.active), "terminal:create session check failed");
         let err = WsMessage::event(
             "terminal:error",
-            serde_json::json!({
-                "terminalId": terminal_id, "message": "Session is inactive or unavailable."
-            }),
+            serde_json::to_value(TerminalErrorPayload {
+                session_id: session_id.to_string(),
+                terminal_id: terminal_id.to_string(),
+                message: "Session is inactive or unavailable.".to_string(),
+            })
+            .unwrap(),
         );
         conn_mgr
             .send_to(conn_id, &serde_json::to_string(&err).unwrap_or_default())
@@ -123,9 +133,12 @@ async fn handle_terminal_create(
         if reg.count_for_socket(conn_id) >= max_per_socket {
             let err = WsMessage::event(
                 "terminal:error",
-                serde_json::json!({
-                    "terminalId": terminal_id, "message": format!("Too many terminals open (max {max_per_socket}).")
-                }),
+                serde_json::to_value(TerminalErrorPayload {
+                    session_id: session_id.to_string(),
+                    terminal_id: terminal_id.to_string(),
+                    message: format!("Too many terminals open (max {max_per_socket})."),
+                })
+                .unwrap(),
             );
             conn_mgr
                 .send_to(conn_id, &serde_json::to_string(&err).unwrap_or_default())
@@ -135,9 +148,14 @@ async fn handle_terminal_create(
         if reg.count_for_session(session_id) >= max_per_session {
             let err = WsMessage::event(
                 "terminal:error",
-                serde_json::json!({
-                    "terminalId": terminal_id, "message": format!("Too many terminals for this session (max {max_per_session}).")
-                }),
+                serde_json::to_value(TerminalErrorPayload {
+                    session_id: session_id.to_string(),
+                    terminal_id: terminal_id.to_string(),
+                    message: format!(
+                        "Too many terminals for this session (max {max_per_session})."
+                    ),
+                })
+                .unwrap(),
             );
             conn_mgr
                 .send_to(conn_id, &serde_json::to_string(&err).unwrap_or_default())
@@ -159,9 +177,12 @@ async fn handle_terminal_create(
             );
             let err = WsMessage::event(
                 "terminal:error",
-                serde_json::json!({
-                    "terminalId": terminal_id, "message": "CLI is not connected for this session."
-                }),
+                serde_json::to_value(TerminalErrorPayload {
+                    session_id: session_id.to_string(),
+                    terminal_id: terminal_id.to_string(),
+                    message: "CLI is not connected for this session.".to_string(),
+                })
+                .unwrap(),
             );
             conn_mgr
                 .send_to(conn_id, &serde_json::to_string(&err).unwrap_or_default())
@@ -178,9 +199,12 @@ async fn handle_terminal_create(
     if entry.is_none() {
         let err = WsMessage::event(
             "terminal:error",
-            serde_json::json!({
-                "terminalId": terminal_id, "message": "Terminal ID is already in use."
-            }),
+            serde_json::to_value(TerminalErrorPayload {
+                session_id: session_id.to_string(),
+                terminal_id: terminal_id.to_string(),
+                message: "Terminal ID is already in use.".to_string(),
+            })
+            .unwrap(),
         );
         conn_mgr
             .send_to(conn_id, &serde_json::to_string(&err).unwrap_or_default())
@@ -191,9 +215,13 @@ async fn handle_terminal_create(
     // Send terminal:open to CLI
     let open_msg = WsMessage::event(
         "terminal:open",
-        serde_json::json!({
-            "sessionId": session_id, "terminalId": terminal_id, "cols": cols, "rows": rows
-        }),
+        serde_json::to_value(TerminalOpenPayload {
+            session_id: session_id.to_string(),
+            terminal_id: terminal_id.to_string(),
+            cols,
+            rows,
+        })
+        .unwrap(),
     );
     conn_mgr
         .send_to(
@@ -238,9 +266,12 @@ async fn handle_terminal_write(
         terminal_registry.write().await.remove(&terminal_id);
         let err = WsMessage::event(
             "terminal:error",
-            serde_json::json!({
-                "terminalId": terminal_id, "message": "CLI disconnected."
-            }),
+            serde_json::to_value(TerminalErrorPayload {
+                session_id: session_id.clone(),
+                terminal_id: terminal_id.clone(),
+                message: "CLI disconnected.".to_string(),
+            })
+            .unwrap(),
         );
         conn_mgr
             .send_to(conn_id, &serde_json::to_string(&err).unwrap_or_default())
@@ -252,11 +283,12 @@ async fn handle_terminal_write(
 
     let msg = WsMessage::event(
         "terminal:write",
-        serde_json::json!({
-            "sessionId": session_id,
-            "terminalId": terminal_id,
-            "data": payload,
-        }),
+        serde_json::to_value(TerminalWritePayload {
+            session_id,
+            terminal_id,
+            data: payload,
+        })
+        .unwrap(),
     );
     conn_mgr
         .send_to(
@@ -294,9 +326,12 @@ async fn handle_terminal_resize(
         terminal_registry.write().await.remove(&terminal_id);
         let err = WsMessage::event(
             "terminal:error",
-            serde_json::json!({
-                "terminalId": terminal_id, "message": "CLI disconnected."
-            }),
+            serde_json::to_value(TerminalErrorPayload {
+                session_id: session_id.clone(),
+                terminal_id: terminal_id.clone(),
+                message: "CLI disconnected.".to_string(),
+            })
+            .unwrap(),
         );
         conn_mgr
             .send_to(conn_id, &serde_json::to_string(&err).unwrap_or_default())
@@ -308,9 +343,13 @@ async fn handle_terminal_resize(
 
     let msg = WsMessage::event(
         "terminal:resize",
-        serde_json::json!({
-            "sessionId": session_id, "terminalId": terminal_id, "cols": cols, "rows": rows
-        }),
+        serde_json::to_value(TerminalResizePayload {
+            session_id,
+            terminal_id,
+            cols,
+            rows,
+        })
+        .unwrap(),
     );
     conn_mgr
         .send_to(
@@ -345,9 +384,11 @@ async fn handle_terminal_close(
     // Notify CLI
     let msg = WsMessage::event(
         "terminal:close",
-        serde_json::json!({
-            "sessionId": entry.session_id, "terminalId": terminal_id
-        }),
+        serde_json::to_value(TerminalClosePayload {
+            session_id: entry.session_id.clone(),
+            terminal_id: terminal_id.clone(),
+        })
+        .unwrap(),
     );
     conn_mgr
         .send_to(
@@ -367,9 +408,11 @@ pub async fn cleanup_terminal_disconnect(
     for entry in removed {
         let msg = WsMessage::event(
             "terminal:close",
-            serde_json::json!({
-                "sessionId": entry.session_id, "terminalId": entry.terminal_id
-            }),
+            serde_json::to_value(TerminalClosePayload {
+                session_id: entry.session_id.clone(),
+                terminal_id: entry.terminal_id.clone(),
+            })
+            .unwrap(),
         );
         conn_mgr
             .send_to(
@@ -393,9 +436,12 @@ pub async fn cleanup_cli_disconnect(
     for entry in removed {
         let msg = WsMessage::event(
             "terminal:error",
-            serde_json::json!({
-                "terminalId": entry.terminal_id, "message": "CLI disconnected."
-            }),
+            serde_json::to_value(TerminalErrorPayload {
+                session_id: entry.session_id.clone(),
+                terminal_id: entry.terminal_id.clone(),
+                message: "CLI disconnected.".to_string(),
+            })
+            .unwrap(),
         );
         conn_mgr
             .send_to(

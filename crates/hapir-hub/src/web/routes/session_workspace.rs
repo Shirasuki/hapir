@@ -1,11 +1,15 @@
 use axum::{
     Json, Router,
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
     routing::get,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
+use hapir_shared::frontend::response_types::{FileSearchData, FileSearchItem};
+use hapir_shared::frontend::rpc::bash::RpcCommandResponse;
+use hapir_shared::frontend::rpc::directories::RpcListDirectoryResponse;
+use hapir_shared::frontend::rpc::files::RpcReadFileResponse;
 
 use crate::web::AppState;
 use crate::web::middleware::auth::AuthContext;
@@ -20,52 +24,29 @@ pub fn router() -> Router<AppState> {
         .route("/sessions/{id}/directory", get(list_directory))
 }
 
-/// Helper to resolve session access and extract the session path. Returns
-/// `(session_id, session_path)` on success, or an error response tuple.
+/// Helper to resolve session access and extract the session path.
 async fn resolve_session_and_path(
     state: &AppState,
     auth: &AuthContext,
     raw_id: &str,
-) -> Result<(String, String), (StatusCode, Json<Value>)> {
+) -> Result<(String, String), ApiError> {
     let (session_id, session) = state
         .sync_engine
         .resolve_session_access(raw_id, &auth.namespace)
-        .await
-        .map_err(|reason| {
-            if reason == "access-denied" {
-                (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({"error": "Session access denied"})),
-                )
-            } else {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({"error": "Session not found"})),
-                )
-            }
-        })?;
+        .await?;
 
     let session_path = session
         .metadata
         .as_ref()
         .map(|m| m.path.clone())
         .filter(|p| !p.is_empty())
-        .ok_or_else(|| {
-            (
-                StatusCode::OK,
-                Json(json!({"success": false, "error": "Session path not available"})),
-            )
-        })?;
+        .ok_or_else(|| ApiError::Internal("Session path not available".into()))?;
 
     Ok((session_id, session_path))
 }
 
-/// Wraps an async RPC call, converting errors to a JSON error payload.
-fn rpc_error(err: anyhow::Error) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::OK,
-        Json(json!({"success": false, "error": err.to_string()})),
-    )
+fn rpc_error(err: anyhow::Error) -> ApiError {
+    ApiError::Internal(err.to_string())
 }
 
 // --- Handlers ---
@@ -74,23 +55,16 @@ async fn git_status(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session_path) = match resolve_session_and_path(&state, &auth, &id).await {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+) -> Result<Json<ApiResponse<RpcCommandResponse>>, ApiError> {
+    let (session_id, session_path) = resolve_session_and_path(&state, &auth, &id).await?;
 
-    match state
+    let resp = state
         .sync_engine
         .get_git_status(&session_id, Some(&session_path))
         .await
-    {
-        Ok(resp) => {
-            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({"success": false}));
-            (StatusCode::OK, Json(val))
-        }
-        Err(e) => rpc_error(e),
-    }
+        .map_err(rpc_error)?;
+
+    Ok(Json(ApiResponse::ok(resp)))
 }
 
 #[derive(Deserialize)]
@@ -103,25 +77,17 @@ async fn git_diff_numstat(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     Query(query): Query<DiffNumstatQuery>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session_path) = match resolve_session_and_path(&state, &auth, &id).await {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
-
+) -> Result<Json<ApiResponse<RpcCommandResponse>>, ApiError> {
+    let (session_id, session_path) = resolve_session_and_path(&state, &auth, &id).await?;
     let staged = parse_bool_param(query.staged.as_deref());
 
-    match state
+    let resp = state
         .sync_engine
         .get_git_diff_numstat(&session_id, Some(&session_path), staged)
         .await
-    {
-        Ok(resp) => {
-            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({"success": false}));
-            (StatusCode::OK, Json(val))
-        }
-        Err(e) => rpc_error(e),
-    }
+        .map_err(rpc_error)?;
+
+    Ok(Json(ApiResponse::ok(resp)))
 }
 
 #[derive(Deserialize)]
@@ -135,42 +101,28 @@ async fn git_diff_file(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     query: Result<Query<DiffFileQuery>, axum::extract::rejection::QueryRejection>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<RpcCommandResponse>>, ApiError> {
     let Query(query) = match query {
         Ok(q) => q,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Invalid file path"})),
-            );
+            return Err(ApiError::BadRequest("Invalid file path".into()));
         }
     };
 
     if query.path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid file path"})),
-        );
+        return Err(ApiError::BadRequest("Invalid file path".into()));
     }
 
-    let (session_id, session_path) = match resolve_session_and_path(&state, &auth, &id).await {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
-
+    let (session_id, session_path) = resolve_session_and_path(&state, &auth, &id).await?;
     let staged = parse_bool_param(query.staged.as_deref());
 
-    match state
+    let resp = state
         .sync_engine
         .get_git_diff_file(&session_id, Some(&session_path), &query.path, staged)
         .await
-    {
-        Ok(resp) => {
-            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({"success": false}));
-            (StatusCode::OK, Json(val))
-        }
-        Err(e) => rpc_error(e),
-    }
+        .map_err(rpc_error)?;
+
+    Ok(Json(ApiResponse::ok(resp)))
 }
 
 #[derive(Deserialize)]
@@ -183,40 +135,27 @@ async fn get_file(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     query: Result<Query<FilePathQuery>, axum::extract::rejection::QueryRejection>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<RpcReadFileResponse>>, ApiError> {
     let Query(query) = match query {
         Ok(q) => q,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Invalid file path"})),
-            );
+            return Err(ApiError::BadRequest("Invalid file path".into()));
         }
     };
 
     if query.path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid file path"})),
-        );
+        return Err(ApiError::BadRequest("Invalid file path".into()));
     }
 
-    let (session_id, _session_path) = match resolve_session_and_path(&state, &auth, &id).await {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let (session_id, _session_path) = resolve_session_and_path(&state, &auth, &id).await?;
 
-    match state
+    let resp = state
         .sync_engine
         .read_session_file(&session_id, &query.path)
         .await
-    {
-        Ok(resp) => {
-            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({"success": false}));
-            (StatusCode::OK, Json(val))
-        }
-        Err(e) => rpc_error(e),
-    }
+        .map_err(rpc_error)?;
+
+    Ok(Json(ApiResponse::ok(resp)))
 }
 
 #[derive(Deserialize)]
@@ -230,11 +169,8 @@ async fn list_files(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     Query(query): Query<FileSearchQuery>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, session_path) = match resolve_session_and_path(&state, &auth, &id).await {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+) -> Result<Json<ApiResponse<FileSearchData>>, ApiError> {
+    let (session_id, session_path) = resolve_session_and_path(&state, &auth, &id).await?;
 
     let search_query = query.query.as_deref().map(|q| q.trim()).unwrap_or("");
     let limit = query.limit.unwrap_or(200).clamp(1, 500);
@@ -245,52 +181,43 @@ async fn list_files(
         args.push(format!("*{search_query}*"));
     }
 
-    match state
+    let resp = state
         .sync_engine
         .run_ripgrep(&session_id, &args, Some(&session_path))
         .await
-    {
-        Ok(resp) => {
-            if !resp.success {
-                return (
-                    StatusCode::OK,
-                    Json(json!({
-                        "success": false,
-                        "error": resp.error.unwrap_or_else(|| "Failed to list files".to_string())
-                    })),
-                );
-            }
+        .map_err(rpc_error)?;
 
-            let stdout = resp.stdout.unwrap_or_default();
-            let files: Vec<Value> = stdout
-                .split('\n')
-                .map(|line| line.trim())
-                .filter(|line| !line.is_empty())
-                .take(limit)
-                .map(|full_path| {
-                    let parts: Vec<&str> = full_path.split('/').collect();
-                    let file_name = parts.last().copied().unwrap_or(full_path);
-                    let file_path = if parts.len() > 1 {
-                        parts[..parts.len() - 1].join("/")
-                    } else {
-                        String::new()
-                    };
-                    json!({
-                        "fileName": file_name,
-                        "filePath": file_path,
-                        "fullPath": full_path,
-                        "fileType": "file"
-                    })
-                })
-                .collect();
-
-            (
-                StatusCode::OK,
-                Json(json!({"success": true, "files": files})),
-            )
-        }
-        Err(e) => rpc_error(e),
+    if !resp.ok {
+        return Err(ApiError::Internal(
+            resp.error
+                .unwrap_or_else(|| "Failed to list files".to_string()),
+        ));
     }
+
+    let stdout = resp.stdout.unwrap_or_default();
+    let files: Vec<FileSearchItem> = stdout
+        .split('\n')
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .take(limit)
+        .map(|full_path| {
+            let parts: Vec<&str> = full_path.split('/').collect();
+            let file_name = parts.last().copied().unwrap_or(full_path).to_string();
+            let file_path = if parts.len() > 1 {
+                parts[..parts.len() - 1].join("/")
+            } else {
+                String::new()
+            };
+            FileSearchItem {
+                file_name,
+                file_path,
+                full_path: full_path.to_string(),
+                file_type: "file".to_string(),
+            }
+        })
+        .collect();
+
+    Ok(Json(ApiResponse::ok(FileSearchData { files })))
 }
 
 #[derive(Deserialize)]
@@ -303,24 +230,19 @@ async fn list_directory(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     Query(query): Query<DirectoryQuery>,
-) -> (StatusCode, Json<Value>) {
-    let (session_id, _session_path) = match resolve_session_and_path(&state, &auth, &id).await {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
-
+) -> Result<Json<ApiResponse<RpcListDirectoryResponse>>, ApiError> {
+    let (session_id, _session_path) = resolve_session_and_path(&state, &auth, &id).await?;
     let path = query.path.as_deref().unwrap_or("");
 
-    match state.sync_engine.list_directory(&session_id, path).await {
-        Ok(resp) => {
-            let val = serde_json::to_value(&resp).unwrap_or_else(|_| json!({"success": false}));
-            (StatusCode::OK, Json(val))
-        }
-        Err(e) => rpc_error(e),
-    }
+    let resp = state
+        .sync_engine
+        .list_directory(&session_id, path)
+        .await
+        .map_err(rpc_error)?;
+
+    Ok(Json(ApiResponse::ok(resp)))
 }
 
-/// Parse an optional boolean query parameter ("true"/"false").
 fn parse_bool_param(value: Option<&str>) -> Option<bool> {
     match value {
         Some("true") => Some(true),

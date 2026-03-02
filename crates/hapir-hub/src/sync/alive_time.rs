@@ -1,11 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
+use hapir_shared::common::utils::now_millis;
 
 /// Clamp an alive-time timestamp: reject non-finite or too-old values,
 /// cap future values to now.

@@ -3,13 +3,13 @@ use clap::Parser;
 use std::env;
 use tracing::debug;
 
-use hapir_shared::modes::SessionMode;
 use crate::commands::common;
-use crate::modules::claude::run::{ClaudeStartOptions, run_claude};
+use crate::modules::claude::run::{run_claude, ClaudeStartOptions};
 use crate::modules::claude::version_check::check_claude_version;
 use hapir_infra::config::CliConfiguration;
-use hapir_shared::modes::PermissionMode;
-use hapir_shared::schemas::SessionStartedBy;
+use hapir_shared::common::modes::PermissionMode;
+use hapir_shared::common::modes::SessionMode;
+use hapir_shared::common::metadata::SessionStartedBy;
 
 /// Parsed arguments for the claude (default) command.
 #[derive(Parser, Debug, Default)]
@@ -51,9 +51,10 @@ pub async fn run(args: ClaudeArgs) -> Result<()> {
 
     let mut config = CliConfiguration::new()?;
 
-    // Map --yolo / --dangerously-skip-permissions to permission mode
-    let permission_mode = if args.dangerously_skip_permissions || args.yolo {
+    let permission_mode = if args.dangerously_skip_permissions {
         Some(PermissionMode::BypassPermissions)
+    } else if args.yolo {
+        Some(PermissionMode::Yolo)
     } else {
         None
     };

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use hapir_shared::schemas::{HapirMachineMetadata, SyncEvent};
+use hapir_shared::common::machine::HapirMachineMetadata;
+use hapir_shared::common::sync_event::SyncEvent;
+use hapir_shared::common::utils::now_millis;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -12,18 +13,18 @@ use crate::store::types::VersionedUpdateResult;
 
 const MACHINE_TIMEOUT_MS: i64 = 45_000;
 
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
+fn unknown_string() -> String {
+    "unknown".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineMetadata {
+    #[serde(default = "unknown_string")]
     pub host: String,
+    #[serde(default = "unknown_string")]
     pub platform: String,
+    #[serde(default = "unknown_string")]
     pub happy_cli_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -54,6 +55,12 @@ pub struct Machine {
 pub struct MachineCache {
     machines: HashMap<String, Machine>,
     last_broadcast_at: HashMap<String, i64>,
+}
+
+impl Default for MachineCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MachineCache {
@@ -142,43 +149,10 @@ impl MachineCache {
 
         let existing = self.machines.get(machine_id);
 
-        // Parse metadata with defaults
-        let metadata: Option<MachineMetadata> = stored.metadata.as_ref().and_then(|v| {
-            let obj = v.as_object()?;
-            Some(MachineMetadata {
-                host: obj
-                    .get("host")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string(),
-                platform: obj
-                    .get("platform")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string(),
-                happy_cli_version: obj
-                    .get("happyCliVersion")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string(),
-                display_name: obj
-                    .get("displayName")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                home_dir: obj
-                    .get("homeDir")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                happy_home_dir: obj
-                    .get("happyHomeDir")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                happy_lib_dir: obj
-                    .get("happyLibDir")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-            })
-        });
+        let metadata: Option<MachineMetadata> = stored
+            .metadata
+            .as_ref()
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
 
         let stored_active_at = stored.active_at.unwrap_or(stored.created_at);
         let existing_active_at = existing.map(|e| e.active_at as i64).unwrap_or(0);
@@ -195,13 +169,7 @@ impl MachineCache {
             } else {
                 existing.map(|e| e.active).unwrap_or(stored.active)
             },
-            active_at: if use_stored {
-                stored_active_at as f64
-            } else if existing_active_at > 0 {
-                existing_active_at as f64
-            } else {
-                stored_active_at as f64
-            },
+            active_at: stored_active_at.max(existing_active_at) as f64,
             metadata,
             metadata_version: stored.metadata_version as f64,
             runner_state: stored.runner_state,

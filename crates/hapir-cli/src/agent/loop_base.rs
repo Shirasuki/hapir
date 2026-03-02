@@ -1,6 +1,10 @@
 use super::session_base::AgentSessionBase;
-use hapir_shared::modes::SessionMode;
-use hapir_infra::utils::terminal::{clear_reclaim_prompt, prepare_for_local_agent, restore_after_local_agent, restore_terminal_state, save_terminal_state, set_logging_suppressed, show_reclaim_prompt, show_reclaiming_prompt};
+use hapir_infra::utils::terminal::{
+    clear_reclaim_prompt, prepare_for_local_agent, restore_after_local_agent,
+    restore_terminal_state, save_terminal_state, set_logging_suppressed, show_reclaim_prompt,
+    show_reclaiming_prompt,
+};
+use hapir_shared::common::modes::SessionMode;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;

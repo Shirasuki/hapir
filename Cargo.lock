@@ -1098,6 +1098,7 @@ dependencies = [
 name = "hapir-shared"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "serde",
  "serde_json",
  "sys-locale",

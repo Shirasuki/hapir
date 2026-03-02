@@ -1,13 +1,13 @@
 pub mod auth;
-pub mod telegram_bind;
 pub mod cli;
 pub mod events;
-pub mod session_workspace;
 pub mod machines;
 pub mod messages;
 pub mod permissions;
 pub mod push;
+pub mod session_workspace;
 pub mod sessions;
+pub mod telegram_bind;
 pub mod voice;
 
 use crate::web::AppState;

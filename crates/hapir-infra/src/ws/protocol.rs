@@ -20,21 +20,21 @@ pub struct WsMessage {
 }
 
 impl WsRequest {
-    pub fn with_ack(event: impl Into<String>, data: Value) -> (Self, String) {
+    pub fn with_ack(event: impl Into<String>, data: &(impl Serialize + ?Sized)) -> (Self, String) {
         let id = Uuid::new_v4().to_string();
         let req = Self {
             id: Some(id.clone()),
             event: event.into(),
-            data,
+            data: serde_json::to_value(data).unwrap_or_default(),
         };
         (req, id)
     }
 
-    pub fn fire(event: impl Into<String>, data: Value) -> Self {
+    pub fn fire(event: impl Into<String>, data: &(impl Serialize + ?Sized)) -> Self {
         Self {
             id: None,
             event: event.into(),
-            data,
+            data: serde_json::to_value(data).unwrap_or_default(),
         }
     }
 }

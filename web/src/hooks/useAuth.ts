@@ -34,7 +34,7 @@ function getAuthPayload(source: AuthSource): { initData: string } | { accessToke
 }
 
 function isNotBoundError(error: unknown): boolean {
-    return error instanceof ApiError && error.status === 401 && error.code === 'not_bound'
+    return error instanceof ApiError && error.status === 401 && error.message === 'not_bound'
 }
 
 export function useAuth(authSource: AuthSource | null, baseUrl: string): {

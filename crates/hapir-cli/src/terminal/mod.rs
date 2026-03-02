@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use hapir_infra::rpc::EventHandlerGroup;
 use hapir_infra::ws::session_client::WsSessionClient;
-use hapir_shared::socket::{
+use hapir_shared::cli::socket::{
     TerminalErrorPayload, TerminalExitPayload, TerminalOutputPayload, TerminalReadyPayload,
 };
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use tokio::sync::mpsc;
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 const DEFAULT_IDLE_TIMEOUT_MS: u64 = 15 * 60_000;
@@ -498,40 +498,20 @@ impl EventHandlerGroup<WsSessionClient> for TerminalManager {
                 tokio::spawn(async move {
                     while let Some(event) = rx.recv().await {
                         let (name, data) = match event {
-                            TerminalEvent::Ready(p) => (
-                                "terminal:ready",
-                                serde_json::json!({
-                                    "sessionId": p.session_id,
-                                    "terminalId": p.terminal_id,
-                                }),
-                            ),
-                            TerminalEvent::Output(p) => (
-                                "terminal:output",
-                                serde_json::json!({
-                                    "sessionId": p.session_id,
-                                    "terminalId": p.terminal_id,
-                                    "data": p.data,
-                                }),
-                            ),
-                            TerminalEvent::Exit(p) => (
-                                "terminal:exit",
-                                serde_json::json!({
-                                    "sessionId": p.session_id,
-                                    "terminalId": p.terminal_id,
-                                    "code": p.code,
-                                    "signal": p.signal,
-                                }),
-                            ),
-                            TerminalEvent::Error(p) => (
-                                "terminal:error",
-                                serde_json::json!({
-                                    "sessionId": p.session_id,
-                                    "terminalId": p.terminal_id,
-                                    "message": p.message,
-                                }),
-                            ),
+                            TerminalEvent::Ready(p) => {
+                                ("terminal:ready", serde_json::to_value(p).unwrap())
+                            }
+                            TerminalEvent::Output(p) => {
+                                ("terminal:output", serde_json::to_value(p).unwrap())
+                            }
+                            TerminalEvent::Exit(p) => {
+                                ("terminal:exit", serde_json::to_value(p).unwrap())
+                            }
+                            TerminalEvent::Error(p) => {
+                                ("terminal:error", serde_json::to_value(p).unwrap())
+                            }
                         };
-                        ws.emit(name, data).await;
+                        ws.emit(name, &data).await;
                     }
                 });
             }

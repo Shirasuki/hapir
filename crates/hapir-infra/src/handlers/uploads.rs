@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
 use tracing::debug;
 
-use hapir_shared::rpc::uploads::{
+use hapir_shared::frontend::rpc::uploads::{
     RpcDeleteUploadRequest, RpcDeleteUploadResponse, RpcUploadFileRequest, RpcUploadFileResponse,
 };
 
@@ -95,7 +95,7 @@ pub async fn register_upload_handlers(rpc: &(impl RpcRegistry + Sync), _working_
         match tokio::fs::write(&file_path, &bytes).await {
             Ok(()) => {
                 debug!(path = %file_path.display(), "File uploaded");
-                response.success = true;
+                response.ok = true;
                 response.path = Some(file_path.to_string_lossy().into());
                 response.error = None;
                 serde_json::to_value(response).unwrap()
@@ -133,12 +133,12 @@ pub async fn register_upload_handlers(rpc: &(impl RpcRegistry + Sync), _working_
 
         match tokio::fs::remove_file(path).await {
             Ok(()) => {
-                resp.success = true;
+                resp.ok = true;
                 resp.error = None;
                 serde_json::to_value(resp).unwrap()
             }
             Err(e) if e.kind() == ErrorKind::NotFound => {
-                resp.success = true;
+                resp.ok = true;
                 resp.error = None;
                 serde_json::to_value(resp).unwrap()
             }

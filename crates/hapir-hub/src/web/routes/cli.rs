@@ -1,55 +1,50 @@
 use axum::{
     Json, Router,
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
     routing::{get, post},
 };
-use serde_json::{Value, json};
 
-use hapir_shared::schemas::cli_api::{
+use hapir_shared::cli::cli_api::{
     CreateMachineRequest, CreateMachineResponse, CreateSessionRequest, CreateSessionResponse,
     ListMessagesQuery, ListMessagesResponse,
 };
+use hapir_shared::frontend::api::{ApiError, ApiResponse};
+use hapir_shared::frontend::response_types::MachineData;
 
 use crate::web::AppState;
 use crate::web::middleware::cli_auth::CliAuthContext;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // POST /cli/sessions — create or resume a session by tag
         .route("/sessions", post(create_session))
+        // GET  /cli/sessions/:id — get session by id or tag
         .route("/sessions/{id}", get(get_session))
+        // GET  /cli/sessions/:id/messages — list messages after a given seq
         .route("/sessions/{id}/messages", get(list_messages))
+        // POST /cli/machines — register or update a machine
         .route("/machines", post(create_machine))
+        // GET  /cli/machines/:id — get machine by id
         .route("/machines/{id}", get(get_machine))
 }
-
-// --- Handlers ---
 
 async fn create_session(
     State(state): State<AppState>,
     Extension(auth): Extension<CliAuthContext>,
     Json(body): Json<CreateSessionRequest>,
-) -> (StatusCode, Json<Value>) {
-    let namespace = body.namespace.as_deref().unwrap_or(&auth.namespace);
-
+) -> Result<Json<ApiResponse<CreateSessionResponse>>, ApiError> {
     match state
         .sync_engine
         .get_or_create_session(
             &body.tag,
             &body.metadata,
             body.agent_state.as_ref(),
-            namespace,
+            &auth.namespace,
         )
         .await
     {
-        Ok(session) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(CreateSessionResponse { session }).unwrap()),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        ),
+        Ok(session) => Ok(Json(ApiResponse::ok(CreateSessionResponse { session }))),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
@@ -57,25 +52,13 @@ async fn get_session(
     State(state): State<AppState>,
     Extension(auth): Extension<CliAuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
-    match state
+) -> Result<Json<ApiResponse<CreateSessionResponse>>, ApiError> {
+    let (_session_id, session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok((_session_id, session)) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(CreateSessionResponse { session }).unwrap()),
-        ),
-        Err("access-denied") => (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Session access denied"})),
-        ),
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Session not found"})),
-        ),
-    }
+        .await?;
+
+    Ok(Json(ApiResponse::ok(CreateSessionResponse { session })))
 }
 
 async fn list_messages(
@@ -83,26 +66,11 @@ async fn list_messages(
     Extension(auth): Extension<CliAuthContext>,
     Path(id): Path<String>,
     Query(query): Query<ListMessagesQuery>,
-) -> (StatusCode, Json<Value>) {
-    let resolved_session_id = match state
+) -> Result<Json<ApiResponse<ListMessagesResponse>>, ApiError> {
+    let (resolved_session_id, _session) = state
         .sync_engine
         .resolve_session_access(&id, &auth.namespace)
-        .await
-    {
-        Ok((session_id, _session)) => session_id,
-        Err("access-denied") => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "Session access denied"})),
-            );
-        }
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Session not found"})),
-            );
-        }
-    };
+        .await?;
 
     let limit = query.limit.unwrap_or(200).clamp(1, 200);
     let messages =
@@ -110,27 +78,18 @@ async fn list_messages(
             .sync_engine
             .get_messages_after(&resolved_session_id, query.after_seq, limit);
 
-    (
-        StatusCode::OK,
-        Json(serde_json::to_value(ListMessagesResponse { messages }).unwrap()),
-    )
+    Ok(Json(ApiResponse::ok(ListMessagesResponse { messages })))
 }
 
 async fn create_machine(
     State(state): State<AppState>,
     Extension(auth): Extension<CliAuthContext>,
     Json(body): Json<CreateMachineRequest>,
-) -> (StatusCode, Json<Value>) {
-    let namespace = body.namespace.as_deref().unwrap_or(&auth.namespace);
-
-    // Check if existing machine belongs to a different namespace
+) -> Result<Json<ApiResponse<CreateMachineResponse>>, ApiError> {
     if let Some(existing) = state.sync_engine.get_machine(&body.id).await
-        && existing.namespace != namespace
+        && existing.namespace != auth.namespace
     {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Machine access denied"})),
-        );
+        return Err(ApiError::AccessDenied("Machine access denied".into()));
     }
 
     let runner_state_value = body
@@ -144,23 +103,14 @@ async fn create_machine(
             &body.id,
             &body.metadata,
             runner_state_value.as_ref(),
-            namespace,
+            &auth.namespace,
         )
         .await
     {
-        Ok(machine) => (
-            StatusCode::OK,
-            Json(
-                serde_json::to_value(CreateMachineResponse {
-                    machine: serde_json::to_value(machine).unwrap(),
-                })
-                .unwrap(),
-            ),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        ),
+        Ok(machine) => Ok(Json(ApiResponse::ok(CreateMachineResponse {
+            machine: serde_json::to_value(machine).unwrap(),
+        }))),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
@@ -168,25 +118,21 @@ async fn get_machine(
     State(state): State<AppState>,
     Extension(auth): Extension<CliAuthContext>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
+) -> Result<Json<ApiResponse<MachineData>>, ApiError> {
     match state
         .sync_engine
         .get_machine_by_namespace(&id, &auth.namespace)
         .await
     {
-        Some(machine) => (StatusCode::OK, Json(json!({ "machine": machine }))),
+        Some(machine) => {
+            let val = serde_json::to_value(machine).unwrap();
+            Ok(Json(ApiResponse::ok(MachineData { machine: val })))
+        }
         None => {
-            // Check if machine exists but belongs to different namespace
             if state.sync_engine.get_machine(&id).await.is_some() {
-                (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({"error": "Machine access denied"})),
-                )
+                Err(ApiError::AccessDenied("Machine access denied".into()))
             } else {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({"error": "Machine not found"})),
-                )
+                Err(ApiError::NotFound("Machine not found".into()))
             }
         }
     }

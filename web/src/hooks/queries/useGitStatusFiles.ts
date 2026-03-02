@@ -19,7 +19,7 @@ export function useGitStatusFiles(api: ApiClient | null, sessionId: string | nul
             }
 
             const statusResult = await api.getGitStatus(sessionId)
-            if (!statusResult.success) {
+            if (!statusResult.ok) {
                 return {
                     status: null,
                     error: statusResult.error ?? statusResult.stderr ?? 'Git status unavailable'
@@ -33,15 +33,15 @@ export function useGitStatusFiles(api: ApiClient | null, sessionId: string | nul
 
             const status = buildGitStatusFiles(
                 statusResult.stdout ?? '',
-                unstagedResult.success ? (unstagedResult.stdout ?? '') : '',
-                stagedResult.success ? (stagedResult.stdout ?? '') : ''
+                unstagedResult.ok ? (unstagedResult.stdout ?? '') : '',
+                stagedResult.ok ? (stagedResult.stdout ?? '') : ''
             )
 
             const errors: string[] = []
-            if (!unstagedResult.success) {
+            if (!unstagedResult.ok) {
                 errors.push(`Unstaged diff unavailable: ${unstagedResult.error ?? unstagedResult.stderr ?? 'unknown error'}`)
             }
-            if (!stagedResult.success) {
+            if (!stagedResult.ok) {
                 errors.push(`Staged diff unavailable: ${stagedResult.error ?? stagedResult.stderr ?? 'unknown error'}`)
             }
 

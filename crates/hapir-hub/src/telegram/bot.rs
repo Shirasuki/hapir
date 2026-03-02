@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tracing::{error, info, warn};
 
-use hapir_shared::schemas::Session;
+use hapir_shared::common::session::Session;
 
 use crate::notifications::push_channel::NotificationChannel;
 use crate::notifications::session_naming::get_agent_name;
@@ -14,8 +14,8 @@ use crate::store::users;
 use crate::sync::SyncEngine;
 
 use super::api::{InlineKeyboardButton, InlineKeyboardMarkup, TelegramApi, WebAppInfo};
-use super::callbacks::handle_callback;
 use super::callback_data::build_mini_app_deep_link;
+use super::callbacks::handle_callback;
 use super::notification_formatter::{create_notification_keyboard, format_session_notification};
 
 pub struct HappyBot {

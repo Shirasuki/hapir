@@ -1,4 +1,6 @@
+pub mod error;
 pub mod middleware;
+pub mod response_types;
 pub mod routes;
 pub mod static_files;
 pub mod telegram_init_data;
@@ -9,10 +11,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
-use hapir_shared::version::PROTOCOL_VERSION;
+use hapir_shared::common::version::PROTOCOL_VERSION;
+use hapir_shared::frontend::api::ApiResponse;
 
 use crate::store::Store;
 use crate::sync::SyncEngine;
+use hapir_shared::frontend::response_types::HealthData;
 
 /// Shared application state passed to all handlers.
 #[derive(Clone)]
@@ -68,9 +72,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/health",
             axum::routing::get(|| async {
-                axum::Json(
-                    serde_json::json!({ "status": "ok", "protocolVersion": PROTOCOL_VERSION }),
-                )
+                axum::Json(ApiResponse::ok(HealthData {
+                    status: "ok",
+                    protocol_version: PROTOCOL_VERSION,
+                }))
             }),
         )
         .nest("/cli", cli_routes)

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use tokio::select;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, info, warn};
 
-use hapir_shared::session::{AgentContent, FlatMessage, RoleWrappedMessage};
+use hapir_shared::common::session_messages::{AgentContent, FlatMessage, RoleWrappedMessage};
 
 use crate::agent::loop_base::LoopResult;
 use crate::agent::session_base::AgentSessionBase;

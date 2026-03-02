@@ -1,7 +1,5 @@
 use hapir_acp::types::AgentMessage;
-use hapir_shared::session::{
-    AssistantTextInner, FlatMessage, ToolCallPayload, ToolResultPayload,
-};
+use hapir_shared::common::session_messages::{AssistantTextInner, FlatMessage, ToolCallPayload, ToolResultPayload};
 
 /// Convert an ACP AgentMessage to a FlatMessage for opencode/gemini forwarding.
 /// Returns None for TextDelta, TurnComplete, and ThinkingStatus (handled separately).
@@ -34,7 +32,10 @@ pub fn agent_message_to_flat(msg: &AgentMessage) -> Option<FlatMessage> {
             },
         }),
         AgentMessage::Plan { items } => Some(FlatMessage::Plan {
-            entries: items.iter().map(|i| serde_json::to_value(i).unwrap_or_default()).collect(),
+            entries: items
+                .iter()
+                .map(|i| serde_json::to_value(i).unwrap_or_default())
+                .collect(),
         }),
         AgentMessage::Error { message } => Some(FlatMessage::AssistantText {
             message: AssistantTextInner {

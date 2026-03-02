@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tracing::debug;
 
-use hapir_shared::rpc::directories::{
-    RpcDirectoryEntry, RpcGetDirectoryTreeRequest, RpcGetDirectoryTreeResponse,
+use hapir_shared::frontend::rpc::directories::{
+    FsEntryType, RpcDirectoryEntry, RpcGetDirectoryTreeRequest, RpcGetDirectoryTreeResponse,
     RpcListDirectoryRequest, RpcListDirectoryResponse, RpcTreeNode,
 };
 
@@ -27,7 +27,7 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
                 let mut response = RpcListDirectoryResponse::default();
 
                 if let Err(e) = validate_path(&req.path, &wd) {
-                    response.success = false;
+                    response.ok = false;
                     response.entries = None;
                     response.error = Some(e);
                     return serde_json::to_value(response).unwrap();
@@ -40,7 +40,7 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
                     Ok(rd) => rd,
                     Err(e) => {
                         debug!(error = %e, "Failed to list directory");
-                        response.success = false;
+                        response.ok = false;
                         response.entries = None;
                         response.error = Some(format!("Failed to list directory: {e}"));
                         return serde_json::to_value(response).unwrap();
@@ -53,9 +53,9 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
                     let file_type = entry.file_type().await.ok();
 
                     let entry_type = match &file_type {
-                        Some(ft) if ft.is_dir() => "directory",
-                        Some(ft) if ft.is_file() => "file",
-                        _ => "other",
+                        Some(ft) if ft.is_dir() => FsEntryType::Directory,
+                        Some(ft) if ft.is_file() => FsEntryType::File,
+                        _ => FsEntryType::Other,
                     };
 
                     let mut size = None;
@@ -74,7 +74,7 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
 
                     entries.push(RpcDirectoryEntry {
                         name,
-                        entry_type: entry_type.into(),
+                        entry_type,
                         size,
                         modified,
                     });
@@ -82,8 +82,8 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
 
                 // Sort: directories first, then alphabetical
                 entries.sort_by(|a, b| {
-                    let a_is_dir = a.entry_type == "directory";
-                    let b_is_dir = b.entry_type == "directory";
+                    let a_is_dir = a.entry_type == FsEntryType::Directory;
+                    let b_is_dir = b.entry_type == FsEntryType::Directory;
                     match (a_is_dir, b_is_dir) {
                         (true, false) => Ordering::Less,
                         (false, true) => Ordering::Greater,
@@ -91,7 +91,7 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
                     }
                 });
 
-                response.success = true;
+                response.ok = true;
                 response.entries = Some(entries);
                 response.error = None;
 
@@ -115,14 +115,14 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
                 let mut response = RpcGetDirectoryTreeResponse::default();
 
                 if req.max_depth < 0 {
-                    response.success = false;
+                    response.ok = false;
                     response.tree = None;
                     response.error = Some("maxDepth must be non-negative".into());
                     return serde_json::to_value(response).unwrap();
                 }
 
                 if let Err(e) = validate_path(&req.path, &wd) {
-                    response.success = false;
+                    response.ok = false;
                     response.tree = None;
                     response.error = Some(e);
                     return serde_json::to_value(response).unwrap();
@@ -138,13 +138,13 @@ pub async fn register_directory_handlers(rpc: &(impl RpcRegistry + Sync), workin
 
                 match build_tree(&resolved, &base_name, 0, req.max_depth as usize).await {
                     Some(tree) => {
-                        response.success = true;
+                        response.ok = true;
                         response.tree = Some(tree);
                         response.error = None;
                         serde_json::to_value(response).unwrap()
                     },
                     None => serde_json::to_value(RpcGetDirectoryTreeResponse {
-                        success: false,
+                        ok: false,
                         tree: None,
                         error: Some("Failed to access the specified path".into()),
                     })
@@ -164,7 +164,11 @@ async fn build_tree(
 ) -> Option<RpcTreeNode> {
     let meta = tokio::fs::symlink_metadata(path).await.ok()?;
 
-    let node_type = if meta.is_dir() { "directory" } else { "file" };
+    let node_type = if meta.is_dir() {
+        FsEntryType::Directory
+    } else {
+        FsEntryType::File
+    };
 
     let modified = meta
         .modified()
@@ -194,8 +198,8 @@ async fn build_tree(
         }
 
         children.sort_by(|a, b| {
-            let a_is_dir = a.node_type == "directory";
-            let b_is_dir = b.node_type == "directory";
+            let a_is_dir = a.node_type == FsEntryType::Directory;
+            let b_is_dir = b.node_type == FsEntryType::Directory;
             match (a_is_dir, b_is_dir) {
                 (true, false) => Ordering::Less,
                 (false, true) => Ordering::Greater,
@@ -211,7 +215,7 @@ async fn build_tree(
     Some(RpcTreeNode {
         name: name.into(),
         path: path.to_string_lossy().into(),
-        node_type: node_type.into(),
+        node_type,
         size: meta.len(),
         modified,
         children,

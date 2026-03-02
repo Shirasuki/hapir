@@ -1,19 +1,12 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use rusqlite::Connection;
 use serde_json::Value;
+
+use hapir_shared::common::utils::now_millis;
 
 use super::types::{StoredSession, VersionedUpdateResult};
 use super::versioned_updates::update_versioned_field;
 
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
-
-fn safe_json_parse(value: Option<String>) -> Option<Value> {
+fn safe_json_parse<T: serde::de::DeserializeOwned>(value: Option<String>) -> Option<T> {
     value.and_then(|s| serde_json::from_str(&s).ok())
 }
 
@@ -45,7 +38,6 @@ pub fn get_or_create_session(
     agent_state: Option<&Value>,
     namespace: &str,
 ) -> anyhow::Result<StoredSession> {
-    // PLACEHOLDER_SESSIONS_CONTINUE
     let mut stmt = conn.prepare(
         "SELECT * FROM sessions WHERE tag = ?1 AND namespace = ?2 ORDER BY created_at DESC LIMIT 1",
     )?;
@@ -178,8 +170,6 @@ pub fn get_session_by_namespace(
         .query_row(rusqlite::params![id, namespace], row_to_session)
         .ok()
 }
-
-// PLACEHOLDER_SESSIONS_QUERIES
 
 pub fn get_sessions(conn: &Connection) -> Vec<StoredSession> {
     let mut stmt = match conn.prepare("SELECT * FROM sessions ORDER BY updated_at DESC") {

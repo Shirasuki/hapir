@@ -1,4 +1,5 @@
-use hapir_shared::schemas::Session;
+use hapir_shared::common::modes::AgentFlavor;
+use hapir_shared::common::session::Session;
 
 /// Returns a human-readable name for the session.
 ///
@@ -36,21 +37,22 @@ pub fn get_session_name(session: &Session) -> String {
 
 /// Returns a human-readable agent name based on the session flavor.
 pub fn get_agent_name(session: &Session) -> String {
-    let flavor = session.metadata.as_ref().and_then(|m| m.flavor.as_deref());
+    let flavor = session.metadata.as_ref().and_then(|m| m.flavor);
 
     match flavor {
-        Some("claude") => "Claude".to_string(),
-        Some("codex") => "Codex".to_string(),
-        Some("gemini") => "Gemini".to_string(),
-        Some("opencode") => "OpenCode".to_string(),
-        _ => "Agent".to_string(),
+        Some(AgentFlavor::Claude) => "Claude".to_string(),
+        Some(AgentFlavor::Codex) => "Codex".to_string(),
+        Some(AgentFlavor::Gemini) => "Gemini".to_string(),
+        Some(AgentFlavor::Opencode) => "OpenCode".to_string(),
+        None => "Agent".to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hapir_shared::schemas::{HapirSessionMetadata, SessionMetadataSummary};
+    use hapir_shared::common::modes::AgentFlavor;
+    use hapir_shared::common::metadata::{HapirSessionMetadata, SessionMetadataSummary};
 
     fn base_session() -> Session {
         Session {
@@ -145,7 +147,7 @@ mod tests {
     fn agent_name_claude() {
         let mut session = base_session();
         let mut meta = base_metadata();
-        meta.flavor = Some("claude".to_string());
+        meta.flavor = Some(AgentFlavor::Claude);
         session.metadata = Some(meta);
         assert_eq!(get_agent_name(&session), "Claude");
     }
@@ -154,7 +156,7 @@ mod tests {
     fn agent_name_codex() {
         let mut session = base_session();
         let mut meta = base_metadata();
-        meta.flavor = Some("codex".to_string());
+        meta.flavor = Some(AgentFlavor::Codex);
         session.metadata = Some(meta);
         assert_eq!(get_agent_name(&session), "Codex");
     }

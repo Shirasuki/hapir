@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use tracing::debug;
 
-use hapir_shared::modes::AgentFlavor;
-use hapir_shared::schemas::{HapirSessionMetadata, Session, SessionStartedBy};
+use hapir_shared::common::modes::AgentFlavor;
+use hapir_shared::common::metadata::{HapirSessionMetadata, SessionStartedBy};
+use hapir_shared::common::session::Session;
 
 use hapir_infra::api::ApiClient;
 use hapir_infra::config::CliConfiguration;
@@ -52,10 +53,7 @@ pub fn build_session_metadata(
         .join("unpacked")
         .to_string_lossy()
         .to_string();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as f64;
+    let now = hapir_shared::common::utils::now_millis() as f64;
 
     HapirSessionMetadata {
         path: working_directory.to_string(),
@@ -82,12 +80,10 @@ pub fn build_session_metadata(
         lifecycle_state_since: Some(now),
         archived_by: None,
         archive_reason: None,
-        flavor: Some(flavor.as_str().to_string()),
+        flavor: Some(flavor),
         worktree: None,
     }
 }
-
-// PLACEHOLDER_REST
 
 /// Read the machine ID from settings, or bail.
 fn get_machine_id(config: &CliConfiguration) -> anyhow::Result<String> {

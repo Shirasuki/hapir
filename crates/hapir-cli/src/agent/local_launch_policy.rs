@@ -1,6 +1,6 @@
-use hapir_shared::schemas::SessionStartedBy;
+use hapir_shared::common::metadata::SessionStartedBy;
 
-use hapir_shared::modes::SessionMode;
+use hapir_shared::common::modes::SessionMode;
 
 /// The exit reason from a local launch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

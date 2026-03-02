@@ -7,6 +7,12 @@ pub enum VisibilityState {
     Hidden,
 }
 
+impl From<&str> for VisibilityState {
+    fn from(s: &str) -> Self {
+        if s == "visible" { Self::Visible } else { Self::Hidden }
+    }
+}
+
 struct VisibilityInner {
     /// namespace → set of visible subscription IDs
     visible_connections: HashMap<String, HashSet<String>>,

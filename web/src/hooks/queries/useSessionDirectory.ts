@@ -25,7 +25,7 @@ export function useSessionDirectory(
             }
 
             const response = await api.listSessionDirectory(sessionId, path)
-            if (!response.success) {
+            if (!response.ok) {
                 return { entries: [], error: response.error ?? 'Failed to list directory' }
             }
 

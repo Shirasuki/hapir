@@ -4,8 +4,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 
-use hapir_shared::modes::{AgentFlavor, PermissionMode, SessionMode};
-use hapir_shared::schemas::SessionStartedBy as SharedStartedBy;
+use hapir_shared::common::modes::{AgentFlavor, PermissionMode, SessionMode};
+use hapir_shared::common::metadata::SessionStartedBy as SharedStartedBy;
 
 use crate::agent::bootstrap::{AgentBootstrapConfig, bootstrap_agent};
 use crate::agent::common_rpc::{
@@ -132,19 +132,18 @@ pub async fn run_codex(
         text
     }));
 
-    let apply_config: Arc<ApplyConfigFn<CodexMode>> =
-        Arc::new(Box::new(|m, params| {
-            if let Some(pm) = params.get("permissionMode") {
-                if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
-                    debug!("[runCodex] Permission mode changed to: {:?}", mode);
-                    m.permission_mode = Some(mode);
-                }
+    let apply_config: Arc<ApplyConfigFn<CodexMode>> = Arc::new(Box::new(|m, params| {
+        if let Some(pm) = params.get("permissionMode") {
+            if let Ok(mode) = serde_json::from_value::<PermissionMode>(pm.clone()) {
+                debug!("[runCodex] Permission mode changed to: {:?}", mode);
+                m.permission_mode = Some(mode);
             }
-            if let Some(cm) = params.get("collaborationMode").and_then(|v| v.as_str()) {
-                debug!("[runCodex] Collaboration mode changed to: {}", cm);
-                m.collaboration_mode = Some(cm.to_string());
-            }
-        }));
+        }
+        if let Some(cm) = params.get("collaborationMode").and_then(|v| v.as_str()) {
+            debug!("[runCodex] Collaboration mode changed to: {}", cm);
+            m.collaboration_mode = Some(cm.to_string());
+        }
+    }));
 
     let backend_for_kill = backend.clone();
     let on_kill: OnKillFn = Arc::new(move || {

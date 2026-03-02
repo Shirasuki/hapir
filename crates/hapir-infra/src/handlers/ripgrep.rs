@@ -4,8 +4,8 @@ use serde_json::Value;
 use tokio::process::Command;
 use tracing::debug;
 
-use hapir_shared::rpc::bash::RpcCommandResponse;
-use hapir_shared::rpc::ripgrep::RpcRipgrepRequest;
+use hapir_shared::frontend::rpc::bash::RpcCommandResponse;
+use hapir_shared::frontend::rpc::ripgrep::RpcRipgrepRequest;
 
 use crate::rpc::RpcRegistry;
 use crate::utils::path_security::validate_path;
@@ -47,7 +47,7 @@ pub async fn register_ripgrep_handlers(rpc: &(impl RpcRegistry + Sync), working_
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-                    response.success = true;
+                    response.ok = true;
                     response.exit_code = Some(code);
                     response.stdout = Some(stdout);
                     response.stderr = Some(stderr);
@@ -58,7 +58,7 @@ pub async fn register_ripgrep_handlers(rpc: &(impl RpcRegistry + Sync), working_
                 Err(e) => {
                     debug!(error = %e, "Failed to run ripgrep");
 
-                    response.success = false;
+                    response.ok = false;
                     response.error = Some(format!("Failed to run ripgrep: {e}"));
 
                     serde_json::to_value(response).unwrap()

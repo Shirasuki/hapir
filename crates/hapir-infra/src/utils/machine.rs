@@ -1,4 +1,4 @@
-use hapir_shared::schemas::HapirMachineMetadata;
+use hapir_shared::common::machine::HapirMachineMetadata;
 use std::env::consts::OS;
 use std::ffi::OsString;
 use std::path::PathBuf;

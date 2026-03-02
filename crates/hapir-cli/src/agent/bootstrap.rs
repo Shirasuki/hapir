@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
-use hapir_shared::modes::{AgentFlavor, ModelMode, PermissionMode, SessionMode};
-use hapir_shared::schemas::SessionStartedBy;
+use hapir_shared::common::modes::{AgentFlavor, ModelMode, PermissionMode, SessionMode};
+use hapir_shared::common::metadata::SessionStartedBy;
 
+use crate::agent::session_init::{SessionBootstrapOptions, bootstrap_session};
 use crate::agent::session_lifecycle::{AgentSessionLifecycle, AgentSessionLifecycleOptions};
-use crate::agent::session_init::{bootstrap_session, SessionBootstrapOptions};
 use hapir_infra::api::ApiClient;
 use hapir_infra::config::CliConfiguration;
 use hapir_infra::ws::session_client::WsSessionClient;

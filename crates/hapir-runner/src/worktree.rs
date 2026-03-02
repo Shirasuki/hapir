@@ -63,10 +63,7 @@ fn to_slug(value: &str) -> String {
 
 /// Format date prefix as MMDD using system time (matches TS `new Date()` approach).
 fn format_date_prefix() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now = hapir_shared::common::utils::now_secs();
     // Convert epoch seconds to month/day (simplified: no timezone, UTC)
     // Days since epoch
     let days = (now / 86400) as i64;
@@ -160,10 +157,7 @@ pub async fn create_worktree(
             .await
             .map_err(|e| format!("Failed to create worktree: {e}"))?;
 
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let created_at = hapir_shared::common::utils::now_millis();
 
         debug!(worktree_path = %wt_str, branch = %branch, "created worktree");
 

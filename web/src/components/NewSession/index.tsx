@@ -220,16 +220,10 @@ export function NewSession(props: {
                 worktreeName: sessionType === 'worktree' ? (worktreeName.trim() || undefined) : undefined
             })
 
-            if (result.type === 'success') {
-                haptic.notification('success')
-                setLastUsedMachineId(machineId)
-                addRecentPath(machineId, directory.trim())
-                props.onSuccess(result.sessionId)
-                return
-            }
-
-            haptic.notification('error')
-            setError(result.message)
+            haptic.notification('success')
+            setLastUsedMachineId(machineId)
+            addRecentPath(machineId, directory.trim())
+            props.onSuccess(result.sessionId)
         } catch (e) {
             haptic.notification('error')
             setError(e instanceof Error ? e.message : 'Failed to create session')

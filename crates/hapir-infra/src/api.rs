@@ -2,13 +2,14 @@ use anyhow::{Result, bail};
 use std::time::Duration;
 use tracing::warn;
 
-use hapir_shared::schemas::cli_api::{
+use hapir_shared::cli::cli_api::{
     CreateMachineRequest, CreateMachineResponse, CreateSessionRequest, CreateSessionResponse,
     ListMessagesResponse,
 };
-use hapir_shared::schemas::{
-    HapirMachineMetadata, HapirSessionMetadata, MachineRunnerState, Session,
-};
+use hapir_shared::common::machine::{HapirMachineMetadata, MachineRunnerState};
+use hapir_shared::common::metadata::HapirSessionMetadata;
+use hapir_shared::common::session::Session;
+use hapir_shared::frontend::api::ApiResponse;
 
 use crate::config::CliConfiguration;
 
@@ -42,7 +43,6 @@ impl ApiClient {
     }
 
     /// 在 Hub 上创建或获取会话（`POST /cli/sessions`）。
-    /// 这是 bootstrap 流程的核心步骤：拿到 `Session` 后才能用其 `id` 构造 `WsSessionClient`。
     pub async fn get_or_create_session(
         &self,
         tag: &str,
@@ -53,7 +53,6 @@ impl ApiClient {
             tag: tag.to_string(),
             metadata: serde_json::to_value(metadata)?,
             agent_state: agent_state.cloned(),
-            namespace: None,
         };
 
         let resp = self
@@ -64,18 +63,11 @@ impl ApiClient {
             .send()
             .await?;
 
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            bail!("POST /cli/sessions failed ({status}): {text}");
-        }
-
-        let parsed: CreateSessionResponse = resp.json().await?;
+        let parsed: CreateSessionResponse = resp.json::<ApiResponse<_>>().await?.into_data()?;
         Ok(parsed.session)
     }
 
     /// 在 Hub 上注册或确认机器（`POST /cli/machines`）。
-    /// 在 bootstrap 流程中先于会话创建调用，确保 Hub 知道当前机器的存在和元数据。
     pub async fn get_or_create_machine(
         &self,
         machine_id: &str,
@@ -86,7 +78,6 @@ impl ApiClient {
             id: machine_id.to_string(),
             metadata: metadata.clone(),
             runner_state: runner_state.cloned(),
-            namespace: None,
         };
 
         let resp = self
@@ -97,13 +88,7 @@ impl ApiClient {
             .send()
             .await?;
 
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            bail!("POST /cli/machines failed ({status}): {text}");
-        }
-
-        let parsed: CreateMachineResponse = resp.json().await?;
+        let parsed: CreateMachineResponse = resp.json::<ApiResponse<_>>().await?.into_data()?;
         Ok(parsed.machine)
     }
 
@@ -114,7 +99,7 @@ impl ApiClient {
         session_id: &str,
         after_seq: i64,
         limit: i64,
-    ) -> Result<Vec<hapir_shared::schemas::DecryptedMessage>> {
+    ) -> Result<Vec<hapir_shared::common::message::DecryptedMessage>> {
         let resp = self
             .http
             .get(format!(
@@ -125,13 +110,7 @@ impl ApiClient {
             .send()
             .await?;
 
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            bail!("GET messages failed ({status}): {text}");
-        }
-
-        let parsed: ListMessagesResponse = resp.json().await?;
+        let parsed: ListMessagesResponse = resp.json::<ApiResponse<_>>().await?.into_data()?;
         Ok(parsed.messages)
     }
 
@@ -161,10 +140,13 @@ impl ApiClient {
             .send()
             .await?;
 
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            warn!(status = %status, "send message failed: {text}");
+        let check: Result<()> = resp
+            .json::<ApiResponse<()>>()
+            .await?
+            .check()
+            .map_err(Into::into);
+        if let Err(e) = check {
+            warn!("send message failed: {e}");
         }
 
         Ok(())

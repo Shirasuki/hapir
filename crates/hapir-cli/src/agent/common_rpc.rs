@@ -9,7 +9,8 @@ use hapir_infra::rpc::{RpcHandlerGroup, RpcRegistry};
 use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::ws::session_client::WsSessionClient;
 
-use hapir_shared::modes::SessionMode;
+use hapir_shared::common::modes::SessionMode;
+use hapir_shared::cli::gateway::RpcCommonResponse;
 
 /// Transforms raw RPC params into the final message string.
 /// Each agent can inject its own attachment handling logic here.
@@ -116,7 +117,7 @@ async fn register_on_user_message<Mode: Clone + Send + 'static>(
             };
 
             if message.is_empty() {
-                return serde_json::json!({"ok": false, "reason": "empty message"});
+                return RpcCommonResponse::error("empty message");
             }
 
             let current = mode.lock().await.clone();
@@ -139,7 +140,7 @@ async fn register_on_user_message<Mode: Clone + Send + 'static>(
                 }
             }
 
-            serde_json::json!({"ok": true})
+            RpcCommonResponse::success()
         }
     })
     .await;
@@ -158,7 +159,7 @@ async fn register_set_session_config<Mode: Clone + Send + 'static>(
             let mut m = mode.lock().await;
             apply(&mut m, &params);
             debug!("[{log_tag}] set-session-config applied");
-            serde_json::json!({"ok": true})
+            RpcCommonResponse::success()
         }
     })
     .await;
@@ -179,46 +180,7 @@ async fn register_kill_session<Mode: Clone + Send + 'static>(
             if let Some(f) = extra {
                 f().await;
             }
-            serde_json::json!({"ok": true})
-        }
-    })
-    .await;
-}
-
-/// Register the `switch` RPC handler. Shared helper for agents that support mode switching.
-pub async fn register_switch_handler(
-    ws: &WsSessionClient,
-    log_tag: &'static str,
-    switch_notify: Arc<Notify>,
-) {
-    ws.register_rpc("switch", move |_params| {
-        let notify = switch_notify.clone();
-        async move {
-            info!("[{log_tag}] switch RPC received, requesting mode switch");
-            notify.notify_one();
-            serde_json::json!({"ok": true})
-        }
-    })
-    .await;
-}
-
-/// Register the `abort` RPC handler for ACP-backend agents. Shared helper.
-pub async fn register_acp_abort_handler<Mode: Clone + Send + 'static>(
-    ws: &WsSessionClient,
-    log_tag: &'static str,
-    backend: Arc<dyn hapir_acp::types::AgentBackend>,
-    session_base: Arc<crate::agent::session_base::AgentSessionBase<Mode>>,
-) {
-    ws.register_rpc("abort", move |_params| {
-        let b = backend.clone();
-        let sb = session_base.clone();
-        async move {
-            debug!("[{log_tag}] abort RPC received");
-            if let Some(sid) = sb.session_id.lock().await.clone() {
-                let _ = b.cancel_prompt(&sid).await;
-            }
-            sb.on_thinking_change(false).await;
-            serde_json::json!({"ok": true})
+            RpcCommonResponse::success()
         }
     })
     .await;
