@@ -15,6 +15,14 @@ type VisibilityState = 'visible' | 'hidden'
 
 type ToastEvent = Extract<SyncEvent, { type: 'toast' }>
 
+export type DisconnectReason = 'heartbeat-timeout' | 'closed' | 'error'
+
+const HEARTBEAT_STALE_MS = 90_000
+const HEARTBEAT_WATCHDOG_INTERVAL_MS = 10_000
+const RECONNECT_BASE_DELAY_MS = 1_000
+const RECONNECT_MAX_DELAY_MS = 30_000
+const RECONNECT_JITTER_MS = 500
+
 function getVisibilityState(): VisibilityState {
     if (typeof document === 'undefined') {
         return 'hidden'
@@ -56,7 +64,7 @@ export function useSSE(options: {
     subscription?: SSESubscription
     onEvent: (event: SyncEvent) => void
     onConnect?: () => void
-    onDisconnect?: (reason: string) => void
+    onDisconnect?: (reason: DisconnectReason) => void
     onError?: (error: unknown) => void
     onToast?: (event: ToastEvent) => void
 }): { subscriptionId: string | null } {
@@ -67,6 +75,10 @@ export function useSSE(options: {
     const onErrorRef = useRef(options.onError)
     const onToastRef = useRef(options.onToast)
     const eventSourceRef = useRef<EventSource | null>(null)
+    const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const reconnectAttemptRef = useRef(0)
+    const lastActivityAtRef = useRef(0)
+    const [reconnectNonce, setReconnectNonce] = useState(0)
     const [subscriptionId, setSubscriptionId] = useState<string | null>(null)
 
     useEffect(() => {
@@ -99,6 +111,11 @@ export function useSSE(options: {
         if (!options.enabled) {
             eventSourceRef.current?.close()
             eventSourceRef.current = null
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current)
+                reconnectTimerRef.current = null
+            }
+            reconnectAttemptRef.current = 0
             setSubscriptionId(null)
             return
         }
@@ -109,9 +126,54 @@ export function useSSE(options: {
             sessionId: subscription.sessionId ?? undefined
         }, getVisibilityState())
         const eventSource = new EventSource(url)
+        let disconnectNotified = false
+        let reconnectRequested = false
         eventSourceRef.current = eventSource
+        lastActivityAtRef.current = Date.now()
+
+        const scheduleReconnect = () => {
+            const attempt = reconnectAttemptRef.current
+            const exponentialDelay = Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * (2 ** attempt))
+            const jitter = Math.floor(Math.random() * (RECONNECT_JITTER_MS + 1))
+            reconnectAttemptRef.current = attempt + 1
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current)
+            }
+            reconnectTimerRef.current = setTimeout(() => {
+                reconnectTimerRef.current = null
+                setReconnectNonce((value) => value + 1)
+            }, exponentialDelay + jitter)
+        }
+
+        const notifyDisconnect = (reason: DisconnectReason) => {
+            if (disconnectNotified) {
+                return
+            }
+            disconnectNotified = true
+            onDisconnectRef.current?.(reason)
+        }
+
+        const requestReconnect = (reason: DisconnectReason) => {
+            if (reconnectRequested) {
+                return
+            }
+            reconnectRequested = true
+            notifyDisconnect(reason)
+            eventSource.close()
+            if (eventSourceRef.current === eventSource) {
+                eventSourceRef.current = null
+            }
+            setSubscriptionId(null)
+            scheduleReconnect()
+        }
 
         const handleSyncEvent = (event: SyncEvent) => {
+            lastActivityAtRef.current = Date.now()
+
+            if (event.type === 'heartbeat') {
+                return
+            }
+
             if (event.type === 'connection-changed') {
                 const data = event.data
                 if (data && typeof data === 'object' && 'subscriptionId' in data) {
@@ -178,22 +240,50 @@ export function useSSE(options: {
 
         eventSource.onmessage = handleMessage
         eventSource.onopen = () => {
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current)
+                reconnectTimerRef.current = null
+            }
+            reconnectAttemptRef.current = 0
+            disconnectNotified = false
+            lastActivityAtRef.current = Date.now()
             onConnectRef.current?.()
         }
         eventSource.onerror = (error) => {
             onErrorRef.current?.(error)
-            const reason = eventSource.readyState === EventSource.CLOSED ? 'closed' : 'error'
-            onDisconnectRef.current?.(reason)
+            if (eventSource.readyState === EventSource.CLOSED) {
+                requestReconnect('closed')
+                return
+            }
+            notifyDisconnect('error')
         }
 
+        const watchdogTimer = setInterval(() => {
+            if (eventSourceRef.current !== eventSource) {
+                return
+            }
+            if (getVisibilityState() === 'hidden') {
+                return
+            }
+            if (Date.now() - lastActivityAtRef.current < HEARTBEAT_STALE_MS) {
+                return
+            }
+            requestReconnect('heartbeat-timeout')
+        }, HEARTBEAT_WATCHDOG_INTERVAL_MS)
+
         return () => {
+            clearInterval(watchdogTimer)
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current)
+                reconnectTimerRef.current = null
+            }
             eventSource.close()
             if (eventSourceRef.current === eventSource) {
                 eventSourceRef.current = null
             }
             setSubscriptionId(null)
         }
-    }, [options.baseUrl, options.enabled, options.token, subscriptionKey, queryClient])
+    }, [options.baseUrl, options.enabled, options.token, subscriptionKey, queryClient, reconnectNonce])
 
     return { subscriptionId }
 }

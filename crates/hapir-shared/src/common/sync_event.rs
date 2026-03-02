@@ -83,6 +83,22 @@ pub enum SyncEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         data: Option<ConnectionChangedData>,
     },
+    #[serde(rename = "heartbeat")]
+    #[ts(rename = "heartbeat")]
+    Heartbeat {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<HeartbeatData>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+#[ts(rename_all = "camelCase")]
+pub struct HeartbeatData {
+    pub timestamp: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]

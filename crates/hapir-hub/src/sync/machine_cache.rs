@@ -279,10 +279,11 @@ impl MachineCache {
 
         if should_broadcast {
             self.last_broadcast_at.insert(machine_id.to_string(), now);
+            let machine_data = serde_json::to_value(&*machine).ok();
             publisher.emit(SyncEvent::MachineUpdated {
                 machine_id: machine_id.to_string(),
                 namespace: Some(machine.namespace.clone()),
-                data: Some(serde_json::json!({"active": true, "activeAt": machine.active_at})),
+                data: machine_data,
             });
         }
     }

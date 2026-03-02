@@ -78,6 +78,7 @@ fn generate_ts_types(types_dir: &Path) {
         DecryptedMessage,
         Session,
         SyncEvent,
+        HeartbeatData,
         ToastData,
         ConnectionChangedData,
         MessageDeltaData,

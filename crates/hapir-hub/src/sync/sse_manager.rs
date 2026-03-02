@@ -242,7 +242,8 @@ fn event_namespace(event: &SyncEvent) -> Option<&str> {
         | SyncEvent::MessageDelta { namespace, .. }
         | SyncEvent::MachineUpdated { namespace, .. }
         | SyncEvent::Toast { namespace, .. }
-        | SyncEvent::ConnectionChanged { namespace, .. } => namespace.as_deref(),
+        | SyncEvent::ConnectionChanged { namespace, .. }
+        | SyncEvent::Heartbeat { namespace, .. } => namespace.as_deref(),
     }
 }
 
@@ -274,5 +275,6 @@ fn event_type_name(event: &SyncEvent) -> &'static str {
         SyncEvent::MachineUpdated { .. } => "machine-updated",
         SyncEvent::Toast { .. } => "toast",
         SyncEvent::ConnectionChanged { .. } => "connection-changed",
+        SyncEvent::Heartbeat { .. } => "heartbeat",
     }
 }

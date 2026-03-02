@@ -6,7 +6,7 @@ import { initializeTheme } from '@/hooks/useTheme'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthSource } from '@/hooks/useAuthSource'
 import { useServerUrl } from '@/hooks/useServerUrl'
-import { useSSE } from '@/hooks/useSSE'
+import { useSSE, type DisconnectReason } from '@/hooks/useSSE'
 import { useSyncingState } from '@/hooks/useSyncingState'
 import { usePushNotifications } from '@/hooks/usePushNotifications'
 import { useVisibilityReporter } from '@/hooks/useVisibilityReporter'
@@ -117,6 +117,7 @@ function AppInner() {
     const selectedSessionId = sessionMatch && sessionMatch.sessionId !== 'new' ? sessionMatch.sessionId : null
     const { isSyncing, startSync, endSync } = useSyncingState()
     const [sseDisconnected, setSseDisconnected] = useState(false)
+    const [sseDisconnectReason, setSseDisconnectReason] = useState<DisconnectReason | null>(null)
     const syncTokenRef = useRef(0)
     const isFirstConnectRef = useRef(true)
     const baseUrlRef = useRef(baseUrl)
@@ -181,6 +182,7 @@ function AppInner() {
     const handleSseConnect = useCallback(() => {
         // Clear disconnected state on successful connection
         setSseDisconnected(false)
+        setSseDisconnectReason(null)
 
         // Increment token to track this specific connection
         const token = ++syncTokenRef.current
@@ -215,10 +217,11 @@ function AppInner() {
             })
     }, [api, queryClient, selectedSessionId, startSync, endSync])
 
-    const handleSseDisconnect = useCallback(() => {
+    const handleSseDisconnect = useCallback((reason: DisconnectReason) => {
         // Only show reconnecting banner if we've already connected once
         if (!isFirstConnectRef.current) {
             setSseDisconnected(true)
+            setSseDisconnectReason(reason)
         }
     }, [])
 
@@ -335,7 +338,7 @@ function AppInner() {
         <AppContextProvider value={{ api, token, baseUrl }}>
             <VoiceProvider>
                 <SyncingBanner isSyncing={isSyncing} />
-                <ReconnectingBanner isReconnecting={sseDisconnected && !isSyncing} />
+                <ReconnectingBanner isReconnecting={sseDisconnected && !isSyncing} reason={sseDisconnectReason} />
                 <VoiceErrorBanner />
                 <OfflineBanner />
                 <div className="h-full flex flex-col">

@@ -11,7 +11,8 @@ use serde::Deserialize;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
 
-use hapir_shared::common::sync_event::{ConnectionChangedData, SyncEvent};
+use hapir_shared::common::sync_event::{ConnectionChangedData, HeartbeatData, SyncEvent};
+use hapir_shared::common::utils::now_millis;
 use hapir_shared::frontend::api::{ApiError, ApiResponse};
 
 use crate::sync::sse_manager::SseMessage;
@@ -104,14 +105,17 @@ async fn events_handler(
 
     let event_stream = futures::stream::once(async move { Ok(initial_event) }).chain(
         receiver_stream.map(move |msg| {
-            Ok(match msg {
-                SseMessage::Event(sync_event) => {
-                    let data =
-                        serde_json::to_string(&sync_event).unwrap_or_else(|_| "{}".to_string());
-                    Event::default().data(data)
-                }
-                SseMessage::Heartbeat => Event::default().comment("heartbeat"),
-            })
+            let sync_event = match msg {
+                SseMessage::Event(e) => e,
+                SseMessage::Heartbeat => SyncEvent::Heartbeat {
+                    namespace: Some(namespace.clone()),
+                    data: Some(HeartbeatData {
+                        timestamp: now_millis() as f64,
+                    }),
+                },
+            };
+            let data = serde_json::to_string(&sync_event).unwrap_or_else(|_| "{}".to_string());
+            Ok(Event::default().data(data))
         }),
     );
 
