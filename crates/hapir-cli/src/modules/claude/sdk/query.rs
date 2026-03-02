@@ -1,6 +1,7 @@
 use std::process::Stdio;
 
 use super::types::{PermissionResult, QueryOptions, SdkMessage};
+use hapir_infra::utils::agent_paths::get_claude_bin;
 use hapir_infra::utils::process::kill_process_tree;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -236,7 +237,7 @@ pub fn query(prompt: &str, options: QueryOptions) -> anyhow::Result<Query> {
     let executable = options
         .path_to_executable
         .clone()
-        .unwrap_or_else(|| "claude".to_string());
+        .unwrap_or_else(get_claude_bin);
 
     let mut args = build_common_args(&options);
     args.push("--print".to_string());
@@ -275,7 +276,7 @@ pub fn query_interactive(options: QueryOptions) -> anyhow::Result<InteractiveQue
     let executable = options
         .path_to_executable
         .clone()
-        .unwrap_or_else(|| "claude".to_string());
+        .unwrap_or_else(get_claude_bin);
 
     let mut args = build_common_args(&options);
     args.push("--input-format".to_string());

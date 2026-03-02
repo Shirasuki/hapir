@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
+use hapir_infra::utils::agent_paths::get_opencode_bin;
 use hapir_shared::common::modes::SessionMode;
 use hapir_shared::common::session_messages::FlatMessage;
 
@@ -17,7 +18,7 @@ pub async fn opencode_local_launcher(session: &Arc<AgentSessionBase<OpencodeMode
     let working_directory = session.path.clone();
     debug!("[opencodeLocalLauncher] Starting in {}", working_directory);
 
-    let mut cmd = tokio::process::Command::new("opencode");
+    let mut cmd = tokio::process::Command::new(get_opencode_bin());
     cmd.current_dir(&working_directory);
 
     let _exit_status = match cmd.status().await {

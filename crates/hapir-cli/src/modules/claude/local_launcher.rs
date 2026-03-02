@@ -6,6 +6,7 @@ use crate::modules::claude::session::ClaudeSession;
 use hapir_shared::common::session_messages::FlatMessage;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use hapir_infra::utils::agent_paths::get_claude_bin;
 use tokio::process::Command;
 use tokio::select;
 use tracing::{debug, info, warn};
@@ -45,7 +46,7 @@ pub async fn claude_local_launcher(session: &Arc<ClaudeSession<ClaudeEnhancedMod
         args
     );
 
-    let mut cmd = Command::new("claude");
+    let mut cmd = Command::new(get_claude_bin());
     cmd.args(&args).current_dir(&working_directory);
 
     if let Some(ref env_vars) = session.claude_env_vars {

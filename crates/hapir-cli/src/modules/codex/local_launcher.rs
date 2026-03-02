@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use hapir_infra::utils::agent_paths::get_codex_bin;
 use tokio::process::Command;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -43,7 +44,7 @@ pub async fn codex_local_launcher(session: &Arc<AgentSessionBase<CodexMode>>) ->
         "codexLocalSync",
     );
 
-    let mut cmd = Command::new("codex");
+    let mut cmd = Command::new(get_codex_bin());
     if let Some(ref sid) = *session.session_id.lock().await {
         cmd.arg("resume").arg(sid);
     }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
+use hapir_infra::utils::agent_paths::get_gemini_bin;
 use hapir_shared::common::metadata::SessionStartedBy as SharedStartedBy;
 use hapir_shared::common::session_messages::FlatMessage;
 
@@ -17,7 +18,7 @@ pub async fn gemini_local_launcher(session: &Arc<AgentSessionBase<GeminiMode>>) 
     let working_directory = session.path.clone();
     debug!("[geminiLocalLauncher] Starting in {}", working_directory);
 
-    let mut cmd = tokio::process::Command::new("gemini");
+    let mut cmd = tokio::process::Command::new(get_gemini_bin());
     cmd.current_dir(&working_directory);
 
     match cmd.status().await {

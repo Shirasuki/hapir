@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use hapir_infra::utils::agent_paths::get_claude_bin;
 use std::io::ErrorKind;
 use std::process::Command;
 
@@ -14,7 +15,7 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
 }
 
 pub fn check_claude_version() -> Result<()> {
-    let output = match Command::new("claude").arg("--version").output() {
+    let output = match Command::new(get_claude_bin()).arg("--version").output() {
         Ok(o) => o,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             bail!("Claude Code 未安装。请先安装: npm install -g @anthropic-ai/claude-code");

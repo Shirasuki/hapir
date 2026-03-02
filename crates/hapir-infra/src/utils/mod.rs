@@ -1,3 +1,4 @@
+pub mod agent_paths;
 pub mod machine;
 pub mod message_queue;
 pub mod path_security;
