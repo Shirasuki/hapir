@@ -28,6 +28,7 @@ import { StatusBar } from '@/components/AssistantChat/StatusBar'
 import { ComposerButtons } from '@/components/AssistantChat/ComposerButtons'
 import { AttachmentItem } from '@/components/AssistantChat/AttachmentItem'
 import { useTranslation } from '@/lib/use-translation'
+import { useSendShortcut } from '@/hooks/useSendShortcut'
 
 export interface TextInputState {
     text: string
@@ -144,7 +145,9 @@ export function HappyComposer(props: {
         prevControlledByUser.current = controlledByUser
     }, [controlledByUser])
 
+    const { sendShortcut } = useSendShortcut()
     const { haptic: platformHaptic, isTouch } = usePlatform()
+    const submitOnEnter = sendShortcut === 'auto' ? !isTouch : sendShortcut === 'enter'
     const { isStandalone, isIOS } = usePWAInstall()
     const isIOSPWA = isIOS && isStandalone
     const bottomPaddingClass = isIOSPWA ? 'pb-0' : 'pb-3'
@@ -260,6 +263,22 @@ export function HappyComposer(props: {
             return
         }
 
+        if (sendShortcut === 'shift-enter' && key === 'Enter' && e.shiftKey) {
+            if (canSend) {
+                e.preventDefault()
+                api.composer().send()
+            }
+            return
+        }
+
+        if (sendShortcut === 'cmd-enter' && key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            if (canSend) {
+                e.preventDefault()
+                api.composer().send()
+            }
+            return
+        }
+
         if (suggestions.length > 0) {
             if (key === 'ArrowUp') {
                 e.preventDefault()
@@ -299,6 +318,9 @@ export function HappyComposer(props: {
             haptic('light')
         }
     }, [
+        sendShortcut,
+        canSend,
+        api,
         suggestions,
         selectedIndex,
         moveUp,
@@ -547,7 +569,7 @@ export function HappyComposer(props: {
                                 placeholder={controlledByUser ? t('misc.typeToTakeover') : showContinueHint ? t('misc.typeMessage') : t('misc.typeAMessage')}
                                 disabled={controlsDisabled}
                                 maxRows={5}
-                                submitOnEnter={!isTouch}
+                                submitOnEnter={submitOnEnter}
                                 cancelOnEscape={false}
                                 onChange={handleChange}
                                 onSelect={handleSelect}
