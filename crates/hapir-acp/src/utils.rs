@@ -1,5 +1,12 @@
 use serde_json::Value;
 
+/// Returns true if `name` is a generic placeholder that should be skipped when
+/// deriving a human-readable tool name (e.g. `"other"`, `"unknown"`, `"tool"`).
+pub fn is_placeholder_tool_name(name: &str) -> bool {
+    let normalized = name.trim().to_lowercase();
+    matches!(normalized.as_str(), "" | "tool" | "unknown" | "other")
+}
+
 /// Derive a human-readable tool name from a permission request's fields.
 ///
 /// Priority: title > rawInput.name > rawInput.tool > kind > "Tool"
@@ -32,7 +39,7 @@ pub fn derive_tool_name(
 
     if let Some(k) = kind {
         let trimmed = k.trim();
-        if !trimmed.is_empty() {
+        if !trimmed.is_empty() && !is_placeholder_tool_name(trimmed) {
             return trimmed.to_string();
         }
     }
@@ -83,5 +90,29 @@ mod tests {
             derive_tool_name(Some("  "), Some("fallback"), None),
             "fallback"
         );
+    }
+
+    #[test]
+    fn is_placeholder_returns_true_for_other_unknown_tool() {
+        assert!(is_placeholder_tool_name("other"));
+        assert!(is_placeholder_tool_name("unknown"));
+        assert!(is_placeholder_tool_name("tool"));
+        assert!(is_placeholder_tool_name("Tool"));
+        assert!(is_placeholder_tool_name("UNKNOWN"));
+        assert!(is_placeholder_tool_name(""));
+        assert!(is_placeholder_tool_name("  "));
+    }
+
+    #[test]
+    fn is_placeholder_returns_false_for_real_names() {
+        assert!(!is_placeholder_tool_name("bash"));
+        assert!(!is_placeholder_tool_name("read_file"));
+        assert!(!is_placeholder_tool_name("execute"));
+    }
+
+    #[test]
+    fn skips_placeholder_kind_and_falls_back_to_default() {
+        assert_eq!(derive_tool_name(None, Some("other"), None), "Tool");
+        assert_eq!(derive_tool_name(None, Some("unknown"), None), "Tool");
     }
 }

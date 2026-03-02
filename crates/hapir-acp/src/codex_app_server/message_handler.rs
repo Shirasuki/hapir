@@ -30,6 +30,7 @@ struct ToolCallInfo {
 pub struct CodexMessageHandler {
     tool_calls: HashMap<String, ToolCallInfo>,
     streaming_message_id: Option<String>,
+    completed_agent_message_ids: std::collections::HashSet<String>,
     on_message: Box<dyn Fn(AgentMessage) + Send + Sync>,
 }
 
@@ -41,6 +42,7 @@ impl CodexMessageHandler {
         Self {
             tool_calls: HashMap::new(),
             streaming_message_id: None,
+            completed_agent_message_ids: std::collections::HashSet::new(),
             on_message: Box::new(on_message),
         }
     }
@@ -197,6 +199,10 @@ impl CodexMessageHandler {
                 (self.on_message)(AgentMessage::ToolResult { id, output, status });
             }
             "agentMessage" => {
+                let id = item.get("id").map(as_str).unwrap_or("").to_string();
+                if !id.is_empty() && !self.completed_agent_message_ids.insert(id) {
+                    return;
+                }
                 self.finalize_stream();
 
                 let text = item
@@ -270,5 +276,48 @@ impl CodexMessageHandler {
         .to_string();
 
         (self.on_message)(AgentMessage::TurnComplete { stop_reason });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use serde_json::json;
+
+    use super::*;
+
+    fn make_handler() -> (CodexMessageHandler, Arc<Mutex<Vec<AgentMessage>>>) {
+        let msgs: Arc<Mutex<Vec<AgentMessage>>> = Arc::new(Mutex::new(Vec::new()));
+        let msgs_clone = Arc::clone(&msgs);
+        let handler = CodexMessageHandler::new(move |m| {
+            msgs_clone.lock().unwrap().push(m);
+        });
+        (handler, msgs)
+    }
+
+    #[test]
+    fn duplicate_agent_message_completion_emits_text_only_once() {
+        let (mut handler, msgs) = make_handler();
+
+        let params = json!({
+            "item": {
+                "type": "agentMessage",
+                "id": "msg-1",
+                "text": "Hello world"
+            }
+        });
+
+        // Send the same item/completed twice with the same id
+        handler.handle_notification("item/completed", &params);
+        handler.handle_notification("item/completed", &params);
+
+        let collected = msgs.lock().unwrap();
+        let text_msgs: Vec<_> = collected
+            .iter()
+            .filter(|m| matches!(m, AgentMessage::Text { .. }))
+            .collect();
+
+        assert_eq!(text_msgs.len(), 1, "expected exactly one Text emission");
     }
 }
