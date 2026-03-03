@@ -37,6 +37,10 @@ pub enum PromptContent {
     Text { text: String },
     #[serde(rename = "localImage")]
     LocalImage { path: String },
+    /// Non-image file attachment. Backends that don't support a native file
+    /// type (e.g. Codex App Server) should render this as a text reference.
+    #[serde(rename = "localFile")]
+    LocalFile { path: String },
 }
 
 // --- Plan item ---

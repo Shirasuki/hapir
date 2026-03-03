@@ -241,9 +241,13 @@ pub async fn codex_remote_launcher(
         });
 
         let mut content = vec![PromptContent::Text { text: prompt }];
-        let image_paths: Vec<String> = pending_attachments.lock().await.drain(..).collect();
-        for path in image_paths {
-            content.push(PromptContent::LocalImage { path });
+        let attachment_paths: Vec<String> = pending_attachments.lock().await.drain(..).collect();
+        for path in attachment_paths {
+            if is_image_path(&path) {
+                content.push(PromptContent::LocalImage { path });
+            } else {
+                content.push(PromptContent::LocalFile { path });
+            }
         }
         if let Err(e) = backend.prompt(&thread_id, content, on_update).await {
             warn!("[codexRemoteLauncher] Prompt error: {}", e);
@@ -263,4 +267,14 @@ pub async fn codex_remote_launcher(
             return LoopResult::Exit;
         }
     }
+}
+
+fn is_image_path(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    matches!(
+        std::path::Path::new(&lower)
+            .extension()
+            .and_then(|e| e.to_str()),
+        Some("jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "heic" | "heif" | "ico" | "svg")
+    )
 }
