@@ -12,6 +12,8 @@ use hapir_acp::codex_app_server::backend::CodexAppServerBackend;
 use hapir_acp::types::{AgentBackend, AgentMessage, AgentSessionConfig, PromptContent};
 use hapir_infra::ws::session_client::WsSessionClient;
 
+use crate::agent::session_base::{STATUS_RESUMING, STATUS_STARTING};
+
 use super::CodexMode;
 
 fn codex_role_wrapped(data: serde_json::Value) -> RoleWrappedMessage {
@@ -89,11 +91,14 @@ pub async fn codex_remote_launcher(
     let working_directory = session.path.clone();
     debug!("[codexRemoteLauncher] Starting in {}", working_directory);
 
+    session.start_thinking_with_status(STATUS_STARTING).await;
+
     if let Err(e) = backend.initialize().await {
         warn!(
             "[codexRemoteLauncher] Failed to initialize Codex App Server: {}",
             e
         );
+        session.on_thinking_change(false).await;
         session
             .ws_client
             .send_typed_message(&FlatMessage::Error {
@@ -112,6 +117,10 @@ pub async fn codex_remote_launcher(
             .await
             .and_then(|m| m.codex_session_id),
     };
+
+    if resume_id.is_some() {
+        session.start_thinking_with_status(STATUS_RESUMING).await;
+    }
 
     let thread_id = match resume_id {
         Some(ref prev_id) => {
@@ -182,6 +191,8 @@ pub async fn codex_remote_launcher(
             }
         }
     };
+
+    session.on_thinking_change(false).await;
 
     loop {
         let batch = select! {

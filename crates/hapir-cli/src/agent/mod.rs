@@ -1,3 +1,4 @@
+pub mod acp_launcher;
 pub mod agent_message_convert;
 pub mod bootstrap;
 pub mod common_rpc;

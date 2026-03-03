@@ -31,6 +31,8 @@ use crate::modules::claude::sdk::types::{
 };
 use crate::modules::claude::session::ClaudeSession;
 
+use crate::agent::session_base::{STATUS_RESUMING, STATUS_STARTING};
+
 use super::run::ClaudeEnhancedMode;
 
 /// 从 assistant 消息中跟踪的 tool_use 块，用于在收到
@@ -179,6 +181,14 @@ pub async fn claude_remote_launcher(
                 }
             }
 
+            // 立即向前端广播启动进度，避免用户看到空白等待
+            let startup_status = if resume_id.is_some() {
+                STATUS_RESUMING
+            } else {
+                STATUS_STARTING
+            };
+            session.base.start_thinking_with_status(startup_status).await;
+
             info!(
                 "[claudeRemoteLauncher] Spawning: resume_id={:?}, mode_changed={}",
                 resume_id, mode_changed
@@ -216,6 +226,7 @@ pub async fn claude_remote_launcher(
                 }
                 Err(e) => {
                     warn!("[claudeRemoteLauncher] Failed to spawn claude: {}", e);
+                    session.base.on_thinking_change(false).await;
                     session
                         .base
                         .ws_client
@@ -244,6 +255,7 @@ pub async fn claude_remote_launcher(
         // 通过 stdin 发送用户消息
         if let Err(e) = qh.send_user_message(&prompt).await {
             warn!("[claudeRemoteLauncher] Failed to send message: {}", e);
+            session.base.on_thinking_change(false).await;
             query_handle = None;
             session.active_pid.store(0, Ordering::Relaxed);
             continue;

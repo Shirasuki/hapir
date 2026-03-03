@@ -12,6 +12,9 @@ use hapir_infra::utils::message_queue::MessageQueue2;
 use hapir_infra::ws::session_client::WsSessionClient;
 use hapir_shared::common::metadata::HapirSessionMetadata;
 
+pub const STATUS_STARTING: &str = "Starting up…";
+pub const STATUS_RESUMING: &str = "Resuming session…";
+
 /// Callback invoked when the mode changes.
 pub type ModeChangeCallback = Box<dyn Fn(SessionMode) + Send + Sync>;
 
@@ -106,10 +109,23 @@ impl<Mode: Clone + Send + 'static> AgentSessionBase<Mode> {
             .await;
     }
 
+    /// Start thinking and immediately broadcast the given status to the frontend.
+    /// Atomically sets both thinking=true and the status text, avoiding an
+    /// intermediate state visible to the keep-alive interval.
+    pub async fn start_thinking_with_status(&self, status: &str) {
+        debug!("[{}] thinking started: {}", self.session_label, status);
+        *self.thinking_status.lock().await = Some(status.to_string());
+        *self.thinking.lock().await = true;
+        self.send_keep_alive().await;
+    }
+
     /// Called when the thinking state changes.
     pub async fn on_thinking_change(&self, thinking: bool) {
         debug!("[{}] thinking changed to {}", self.session_label, thinking);
         *self.thinking.lock().await = thinking;
+        if !thinking {
+            *self.thinking_status.lock().await = None;
+        }
         self.send_keep_alive().await;
     }
 
