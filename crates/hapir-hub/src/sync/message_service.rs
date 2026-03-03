@@ -1,7 +1,24 @@
 use hapir_shared::common::modes::AgentFlavor;
 use hapir_shared::common::message::{AttachmentMetadata, DecryptedMessage};
+use hapir_shared::common::session_messages::MessageMeta;
 use hapir_shared::common::sync_event::SyncEvent;
+use serde::Serialize;
 use serde_json::Value;
+
+#[derive(Serialize)]
+struct UserMessageContent<'a> {
+    role: &'static str,
+    content: UserTextContent<'a>,
+    meta: MessageMeta,
+}
+
+#[derive(Serialize)]
+struct UserTextContent<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    text: &'a str,
+    attachments: Option<&'a [AttachmentMetadata]>,
+}
 
 use super::event_publisher::EventPublisher;
 use super::todo_extraction::extract_todos_from_message_content;
@@ -99,17 +116,11 @@ impl MessageService {
 
         let sent_from = sent_from.unwrap_or("webapp");
 
-        let content = serde_json::json!({
-            "role": "user",
-            "content": {
-                "type": "text",
-                "text": text,
-                "attachments": attachments,
-            },
-            "meta": {
-                "sentFrom": sent_from,
-            }
-        });
+        let content = serde_json::to_value(UserMessageContent {
+            role: "user",
+            content: UserTextContent { kind: "text", text, attachments },
+            meta: MessageMeta { sent_from: sent_from.to_string() },
+        })?;
 
         let msg = messages::add_message(&store.conn(), session_id, &content, local_id)?;
 

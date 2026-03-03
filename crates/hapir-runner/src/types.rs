@@ -88,6 +88,54 @@ pub struct SessionStartedMetadata {
     pub host_pid: u32,
 }
 
+/// Result of `do_stop_session`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopSessionResult {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Generic `{"status": "..."}` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusResponse {
+    pub status: String,
+}
+
+/// Response for `path-exists` RPC.
+#[derive(Debug, Serialize)]
+pub struct PathExistsResponse {
+    pub exists: std::collections::HashMap<String, bool>,
+}
+
+/// HTTP success response body for spawn-session.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnHttpSuccess {
+    pub success: bool,
+    pub session_id: Option<String>,
+    pub approved_new_directory_creation: bool,
+}
+
+/// HTTP approval-required response body for spawn-session.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnHttpApprovalRequired {
+    pub success: bool,
+    pub requires_user_approval: bool,
+    pub action_required: &'static str,
+    pub directory: Option<String>,
+}
+
+/// HTTP error response body for spawn-session.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnHttpError {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 /// Stop session request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

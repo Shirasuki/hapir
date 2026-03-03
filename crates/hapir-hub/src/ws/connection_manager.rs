@@ -5,9 +5,16 @@ use std::pin::Pin;
 use super::rpc_registry::RpcRegistry;
 use crate::sync::rpc_gateway::RpcTransport;
 use hapir_shared::cli::ws_protocol::WsMessage;
+use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tracing::info;
+
+#[derive(Serialize)]
+struct RpcRequestEnvelope {
+    method: String,
+    params: String,
+}
 
 /// Distinguishes why an RPC call could not be dispatched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,13 +293,14 @@ impl ConnectionManager {
             .await
             .insert(request_id.clone(), PendingRpc { tx: resp_tx });
 
+        let envelope = RpcRequestEnvelope {
+            method: method.to_string(),
+            params: serde_json::to_string(&params).unwrap_or_default(),
+        };
         let msg = WsMessage::request(
             &request_id,
             "rpc-request",
-            serde_json::json!({
-                "method": method,
-                "params": serde_json::to_string(&params).unwrap_or_default()
-            }),
+            serde_json::to_value(&envelope).unwrap_or_default(),
         );
 
         if tx

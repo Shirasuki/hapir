@@ -2,8 +2,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use serde::Serialize;
 use serde_json::Value;
 use tokio::select;
+
+#[derive(Serialize)]
+struct ClaudeTextBlock {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    text: String,
+}
+
+fn claude_text_content(text: String) -> Value {
+    serde_json::to_value([ClaudeTextBlock { kind: "text", text }]).unwrap_or_default()
+}
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, info, warn};
 
@@ -213,10 +225,7 @@ pub async fn claude_remote_launcher(
                                 data: ClaudeOutputData::Assistant {
                                     message: ClaudeMessageBody {
                                         role: "assistant".into(),
-                                        content: serde_json::json!([{
-                                            "type": "text",
-                                            "text": format!("Failed to spawn claude SDK: {}", e),
-                                        }]),
+                                        content: claude_text_content(format!("Failed to spawn claude SDK: {}", e)),
                                         usage: None,
                                     },
                                     parent_uuid: None,
@@ -461,10 +470,7 @@ pub async fn claude_remote_launcher(
                                     data: ClaudeOutputData::Assistant {
                                         message: ClaudeMessageBody {
                                             role: "assistant".into(),
-                                            content: serde_json::json!([{
-                                                "type": "text",
-                                                "text": error_text,
-                                            }]),
+                                            content: claude_text_content(error_text.clone()),
                                             usage: None,
                                         },
                                         parent_uuid: None,

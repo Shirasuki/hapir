@@ -9,6 +9,38 @@ pub struct TelegramApi {
 
 // --- Request/response types ---
 
+#[derive(Debug, Serialize)]
+struct SendMessageRequest<'a> {
+    chat_id: i64,
+    text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_markup: Option<&'a InlineKeyboardMarkup>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnswerCallbackQueryRequest<'a> {
+    callback_query_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct EditMessageTextRequest<'a> {
+    chat_id: i64,
+    message_id: i64,
+    text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_markup: Option<&'a InlineKeyboardMarkup>,
+}
+
+#[derive(Debug, Serialize)]
+struct GetUpdatesRequest {
+    timeout: u32,
+    allowed_updates: &'static [&'static str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct InlineKeyboardMarkup {
     pub inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
@@ -81,13 +113,7 @@ impl TelegramApi {
         text: &str,
         reply_markup: Option<&InlineKeyboardMarkup>,
     ) -> Result<()> {
-        let mut body = serde_json::json!({
-            "chat_id": chat_id,
-            "text": text,
-        });
-        if let Some(markup) = reply_markup {
-            body["reply_markup"] = serde_json::to_value(markup)?;
-        }
+        let body = SendMessageRequest { chat_id, text, reply_markup };
         self.post("sendMessage", &body).await
     }
 
@@ -96,12 +122,7 @@ impl TelegramApi {
         callback_query_id: &str,
         text: Option<&str>,
     ) -> Result<()> {
-        let mut body = serde_json::json!({
-            "callback_query_id": callback_query_id,
-        });
-        if let Some(t) = text {
-            body["text"] = serde_json::Value::String(t.to_string());
-        }
+        let body = AnswerCallbackQueryRequest { callback_query_id, text };
         self.post("answerCallbackQuery", &body).await
     }
 
@@ -112,25 +133,16 @@ impl TelegramApi {
         text: &str,
         reply_markup: Option<&InlineKeyboardMarkup>,
     ) -> Result<()> {
-        let mut body = serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text,
-        });
-        if let Some(markup) = reply_markup {
-            body["reply_markup"] = serde_json::to_value(markup)?;
-        }
+        let body = EditMessageTextRequest { chat_id, message_id, text, reply_markup };
         self.post("editMessageText", &body).await
     }
 
     pub async fn get_updates(&self, offset: Option<i64>, timeout: u32) -> Result<Vec<Update>> {
-        let mut body = serde_json::json!({
-            "timeout": timeout,
-            "allowed_updates": ["message", "callback_query"],
-        });
-        if let Some(off) = offset {
-            body["offset"] = serde_json::Value::Number(off.into());
-        }
+        let body = GetUpdatesRequest {
+            timeout,
+            allowed_updates: &["message", "callback_query"],
+            offset,
+        };
 
         let resp: ApiResponse<Vec<Update>> = self
             .client
@@ -151,7 +163,7 @@ impl TelegramApi {
         Ok(resp.result.unwrap_or_default())
     }
 
-    async fn post(&self, method: &str, body: &serde_json::Value) -> Result<()> {
+    async fn post(&self, method: &str, body: &impl serde::Serialize) -> Result<()> {
         let resp: ApiResponse<serde_json::Value> = self
             .client
             .post(format!("{}/{method}", self.base_url))

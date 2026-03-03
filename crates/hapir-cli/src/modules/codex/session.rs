@@ -151,7 +151,8 @@ impl RpcHandlerGroup<WsSessionClient> for CodexSession {
                             {
                                 if let Some(request) = requests.remove(&id_for_state) {
                                     if state.get("completedRequests").is_none() {
-                                        state["completedRequests"] = serde_json::json!({});
+                                        state["completedRequests"] =
+                                            serde_json::Value::Object(serde_json::Map::new());
                                     }
                                     if let Some(completed_map) = state
                                         .get_mut("completedRequests")
@@ -161,14 +162,14 @@ impl RpcHandlerGroup<WsSessionClient> for CodexSession {
                                             request.as_object().cloned().unwrap_or_default();
                                         entry.insert(
                                             "status".to_string(),
-                                            serde_json::json!(status),
+                                            serde_json::Value::String(status.to_string()),
                                         );
                                         entry.insert(
                                             "completedAt".to_string(),
-                                            serde_json::json!(completed_at),
+                                            serde_json::Value::from(completed_at),
                                         );
                                         completed_map
-                                            .insert(id_for_state, serde_json::json!(entry));
+                                            .insert(id_for_state, serde_json::Value::Object(entry));
                                     }
                                 }
                             }

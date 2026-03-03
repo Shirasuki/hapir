@@ -1,5 +1,21 @@
 use std::collections::{HashMap, HashSet};
+use hapir_shared::cli::ws_protocol::WsMessage;
+use serde::Serialize;
 use tokio::time::{Duration, Instant};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalErrorData {
+    terminal_id: String,
+    message: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalCloseData {
+    session_id: String,
+    terminal_id: String,
+}
 
 /// A registered terminal connection.
 #[derive(Debug, Clone)]
@@ -140,25 +156,23 @@ impl TerminalRegistry {
         let mut actions = Vec::new();
         for terminal_id in idle_ids {
             if let Some(entry) = self.remove(&terminal_id) {
+                let err_data = serde_json::to_value(TerminalErrorData {
+                    terminal_id: entry.terminal_id.clone(),
+                    message: "Terminal closed due to inactivity.",
+                }).unwrap_or_default();
+                let close_data = serde_json::to_value(TerminalCloseData {
+                    session_id: entry.session_id.clone(),
+                    terminal_id: entry.terminal_id.clone(),
+                }).unwrap_or_default();
                 actions.push(IdleTerminalAction {
                     socket_id: entry.socket_id,
                     cli_socket_id: entry.cli_socket_id,
-                    err_msg: serde_json::json!({
-                        "event": "terminal:error",
-                        "data": {
-                            "terminalId": entry.terminal_id,
-                            "message": "Terminal closed due to inactivity."
-                        }
-                    })
-                    .to_string(),
-                    close_msg: serde_json::json!({
-                        "event": "terminal:close",
-                        "data": {
-                            "sessionId": entry.session_id,
-                            "terminalId": entry.terminal_id
-                        }
-                    })
-                    .to_string(),
+                    err_msg: serde_json::to_string(
+                        &WsMessage::event("terminal:error", err_data)
+                    ).unwrap_or_default(),
+                    close_msg: serde_json::to_string(
+                        &WsMessage::event("terminal:close", close_data)
+                    ).unwrap_or_default(),
                 });
             }
         }

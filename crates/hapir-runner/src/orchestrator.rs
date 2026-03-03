@@ -11,7 +11,12 @@ use hapir_infra::utils::process::spawn_runner_background;
 use hapir_infra::ws::machine_client::WsMachineClient;
 use hapir_shared::common::machine::{MachineRunnerState, MachineRunnerStatus};
 use hapir_shared::common::utils::now_millis;
-use serde_json::json;
+use crate::types::{PathExistsResponse, SpawnSessionResponse, StopSessionResult};
+
+#[derive(serde::Serialize)]
+struct RpcAck {
+    message: &'static str,
+}
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -340,14 +345,15 @@ async fn connect_to_hub(
                     }
                 });
             if req.directory.is_empty() {
-                return json!({ "type": "error", "error": "Directory is required" });
+                return serde_json::to_value(SpawnSessionResponse {
+                    r#type: "error".to_string(),
+                    session_id: None,
+                    error: Some("Directory is required".to_string()),
+                    directory: None,
+                }).unwrap_or_default();
             }
             let resp = control_server::do_spawn_session(&rs, req).await;
-            match resp.r#type.as_str() {
-                "success" => json!({ "type": "success", "sessionId": resp.session_id }),
-                "requestToApproveDirectoryCreation" => json!({ "type": "requestToApproveDirectoryCreation", "directory": resp.directory }),
-                _ => json!({ "type": "error", "error": resp.error }),
-            }
+            serde_json::to_value(&resp).unwrap_or_default()
         })
     }).await;
 
@@ -357,14 +363,13 @@ async fn connect_to_hub(
         Box::pin(async move {
             let session_id = data.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
             if session_id.is_empty() {
-                return json!({"error": "Session ID is required"});
+                return serde_json::to_value(StopSessionResult {
+                    success: false,
+                    error: Some("Session ID is required".to_string()),
+                }).unwrap_or_default();
             }
             let result = control_server::do_stop_session(&rs, session_id).await;
-            if result.get("success").and_then(|v| v.as_bool()) == Some(true) {
-                json!({"message": "Session stopped"})
-            } else {
-                json!({"error": "Session not found or failed to stop"})
-            }
+            serde_json::to_value(&result).unwrap_or_default()
         })
     })
     .await;
@@ -378,7 +383,7 @@ async fn connect_to_hub(
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 control_server::do_stop_runner(&rs2, ShutdownSource::HapiApp).await;
             });
-            json!({"message": "Runner stop request acknowledged"})
+            serde_json::to_value(RpcAck { message: "Runner stop request acknowledged" }).unwrap_or_default()
         })
     })
     .await;
@@ -408,13 +413,13 @@ async fn connect_to_hub(
                     })
                 })
                 .collect();
-            let mut exists = serde_json::Map::new();
+            let mut exists = std::collections::HashMap::new();
             for handle in handles {
                 if let Ok((path_str, is_dir)) = handle.await {
-                    exists.insert(path_str, json!(is_dir));
+                    exists.insert(path_str, is_dir);
                 }
             }
-            json!({ "exists": exists })
+            serde_json::to_value(PathExistsResponse { exists }).unwrap_or_default()
         })
     })
     .await;

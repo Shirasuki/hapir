@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
@@ -90,7 +90,7 @@ async fn maybe_cleanup_worktree(
 async fn session_started(
     State(state): State<RunnerState>,
     Json(payload): Json<SessionStartedPayload>,
-) -> (StatusCode, Json<Value>) {
+) -> (StatusCode, Json<StatusResponse>) {
     info!(session_id = %payload.session_id, "session started webhook");
 
     // Extract hostPid from metadata (matches TS: sessionMetadata.hostPid)
@@ -149,7 +149,7 @@ async fn session_started(
         );
     }
 
-    (StatusCode::OK, Json(json!({"status": "ok"})))
+    (StatusCode::OK, Json(StatusResponse { status: "ok".to_string() }))
 }
 
 async fn list_sessions(State(state): State<RunnerState>) -> Json<ListSessionsResponse> {
@@ -170,7 +170,7 @@ async fn list_sessions(State(state): State<RunnerState>) -> Json<ListSessionsRes
 }
 
 /// Stop a session by ID (or PID- prefix fallback). Shared logic used by both HTTP handler and RPC.
-pub async fn do_stop_session(state: &RunnerState, session_id: &str) -> Value {
+pub async fn do_stop_session(state: &RunnerState, session_id: &str) -> StopSessionResult {
     let mut sessions = state.sessions.lock().await;
 
     // Find session by happySessionId or PID- prefix fallback (matches TS behavior)
@@ -212,16 +212,16 @@ pub async fn do_stop_session(state: &RunnerState, session_id: &str) -> Value {
                     .spawn();
             }
         }
-        return json!({"success": true});
+        return StopSessionResult { success: true, error: None };
     }
 
-    json!({"success": false, "error": "session not found"})
+    StopSessionResult { success: false, error: Some("session not found".to_string()) }
 }
 
 async fn stop_session(
     State(state): State<RunnerState>,
     Json(req): Json<StopSessionRequest>,
-) -> (StatusCode, Json<Value>) {
+) -> (StatusCode, Json<StopSessionResult>) {
     let result = do_stop_session(&state, &req.session_id).await;
     // TS always returns 200 regardless of success/failure
     (StatusCode::OK, Json(result))
@@ -681,27 +681,27 @@ async fn spawn_session(
     match resp.r#type.as_str() {
         "success" => (
             StatusCode::OK,
-            Json(json!({
-                "success": true,
-                "sessionId": resp.session_id,
-                "approvedNewDirectoryCreation": true,
-            })),
+            Json(serde_json::to_value(SpawnHttpSuccess {
+                success: true,
+                session_id: resp.session_id,
+                approved_new_directory_creation: true,
+            }).unwrap_or_default()),
         ),
         "requestToApproveDirectoryCreation" => (
             StatusCode::CONFLICT,
-            Json(json!({
-                "success": false,
-                "requiresUserApproval": true,
-                "actionRequired": "CREATE_DIRECTORY",
-                "directory": resp.directory,
-            })),
+            Json(serde_json::to_value(SpawnHttpApprovalRequired {
+                success: false,
+                requires_user_approval: true,
+                action_required: "CREATE_DIRECTORY",
+                directory: resp.directory,
+            }).unwrap_or_default()),
         ),
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": resp.error,
-            })),
+            Json(serde_json::to_value(SpawnHttpError {
+                success: false,
+                error: resp.error,
+            }).unwrap_or_default()),
         ),
     }
 }
@@ -739,7 +739,7 @@ pub async fn stop_all_sessions(state: &RunnerState) -> Vec<String> {
 }
 
 /// Request runner shutdown. Shared logic used by both HTTP handler and RPC.
-pub async fn do_stop_runner(state: &RunnerState, source: ShutdownSource) -> Value {
+pub async fn do_stop_runner(state: &RunnerState, source: ShutdownSource) {
     info!("runner stop requested (source: {:?})", source);
     // Try mpsc first, then oneshot
     if let Some(tx) = state.shutdown_tx_mpsc.lock().await.as_ref() {
@@ -747,14 +747,13 @@ pub async fn do_stop_runner(state: &RunnerState, source: ShutdownSource) -> Valu
     } else if let Some(tx) = state.shutdown_tx.lock().await.take() {
         let _ = tx.send(source);
     }
-    json!({"status": "ok"})
 }
 
-async fn stop_runner(State(state): State<RunnerState>) -> (StatusCode, Json<Value>) {
+async fn stop_runner(State(state): State<RunnerState>) -> (StatusCode, Json<StatusResponse>) {
     // Delay shutdown so the HTTP response gets sent first (matches TS 50ms delay)
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         do_stop_runner(&state, ShutdownSource::HapiCli).await;
     });
-    (StatusCode::OK, Json(json!({"status": "stopping"})))
+    (StatusCode::OK, Json(StatusResponse { status: "stopping".to_string() }))
 }
