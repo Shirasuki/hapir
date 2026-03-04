@@ -99,6 +99,8 @@ hapir doctor       # Show diagnostics
 
 ## Environment Variables
 
+See [docs/environment-variables.md](./docs/environment-variables.md) for the full reference.
+
 **Hub:**
 
 | Variable | Default | Description |
@@ -108,18 +110,30 @@ hapir doctor       # Show diagnostics
 | `HAPIR_LISTEN_HOST` | `127.0.0.1` | Listen address |
 | `HAPIR_LISTEN_PORT` | `3006` | Listen port |
 | `HAPIR_PUBLIC_URL` | — | Public URL for external access |
-| `CORS_ORIGINS` | — | Comma-separated allowed origins |
+| `CORS_ORIGINS` | derived from `HAPIR_PUBLIC_URL` | Comma-separated allowed origins |
+| `CLI_API_TOKEN` | — | Static token for CLI authentication |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token |
-| `VAPID_SUBJECT` | — | VAPID subject for web push |
+| `TELEGRAM_NOTIFICATION` | `true` | Set to `false` to disable Telegram notifications |
+| `VAPID_SUBJECT` | `mailto:admin@localhost` | VAPID subject for web push |
+| `ELEVENLABS_API_KEY` | — | ElevenLabs API key for voice |
+| `ELEVENLABS_AGENT_ID` | — | ElevenLabs agent ID for voice |
 
-**CLI:**
+**CLI / Runner:**
 
 | Variable | Default | Description |
 |---|---|---|
 | `HAPIR_API_URL` | `http://localhost:3006` | Hub URL |
 | `CLI_API_TOKEN` | — | Authentication token |
 | `HAPIR_HOME` | `~/.hapir` | Data directory |
-| `HAPIR_EXPERIMENTAL` | — | Enable experimental features |
+| `HAPIR_EXPERIMENTAL` | `false` | Enable experimental features (`true`/`1`/`yes`) |
+| `HAPIR_HOSTNAME` | system hostname | Override machine hostname reported to hub |
+| `HAPIR_CLAUDE_PATH` | `claude` | Path to Claude Code executable |
+| `HAPIR_CODEX_PATH` | `codex` | Path to Codex executable |
+| `HAPIR_GEMINI_PATH` | `gemini` | Path to Gemini CLI executable |
+| `HAPIR_OPENCODE_PATH` | `opencode` | Path to OpenCode executable |
+| `HAPIR_HTTP_MCP_URL` | — | HTTP backend URL for MCP stdio bridge |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude config directory (MCP, slash commands) |
+| `CODEX_HOME` | `~/.codex` | Codex home directory |
 
 Logging is controlled via `RUST_LOG` (defaults to `info`).
 

@@ -99,6 +99,8 @@ hapir doctor       # 显示诊断信息
 
 ## 环境变量
 
+完整参考见 [docs/environment-variables.md](./docs/environment-variables.md)。
+
 **Hub：**
 
 | 变量 | 默认值 | 说明 |
@@ -108,18 +110,30 @@ hapir doctor       # 显示诊断信息
 | `HAPIR_LISTEN_HOST` | `127.0.0.1` | 监听地址 |
 | `HAPIR_LISTEN_PORT` | `3006` | 监听端口 |
 | `HAPIR_PUBLIC_URL` | — | 外部访问的公开 URL |
-| `CORS_ORIGINS` | — | 逗号分隔的允许来源 |
-| `TELEGRAM_BOT_TOKEN` | — | Telegram 机器人 token |
-| `VAPID_SUBJECT` | — | Web Push 的 VAPID subject |
+| `CORS_ORIGINS` | 从 `HAPIR_PUBLIC_URL` 推导 | 逗号分隔的 CORS 允许来源 |
+| `CLI_API_TOKEN` | — | CLI 认证静态令牌 |
+| `TELEGRAM_BOT_TOKEN` | — | Telegram 机器人令牌 |
+| `TELEGRAM_NOTIFICATION` | `true` | 设为 `false` 可禁用 Telegram 通知推送 |
+| `VAPID_SUBJECT` | `mailto:admin@localhost` | Web Push 的 VAPID subject |
+| `ELEVENLABS_API_KEY` | — | 语音助手 ElevenLabs API 密钥 |
+| `ELEVENLABS_AGENT_ID` | — | 语音助手 ElevenLabs agent ID |
 
-**CLI：**
+**CLI / Runner：**
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `HAPIR_API_URL` | `http://localhost:3006` | Hub 地址 |
-| `CLI_API_TOKEN` | — | 认证 token |
+| `CLI_API_TOKEN` | — | 认证令牌 |
 | `HAPIR_HOME` | `~/.hapir` | 数据目录 |
-| `HAPIR_EXPERIMENTAL` | — | 启用实验性功能 |
+| `HAPIR_EXPERIMENTAL` | `false` | 启用实验性功能（`true`/`1`/`yes`） |
+| `HAPIR_HOSTNAME` | 系统主机名 | 覆盖上报给 hub 的机器主机名 |
+| `HAPIR_CLAUDE_PATH` | `claude` | Claude Code 可执行文件路径 |
+| `HAPIR_CODEX_PATH` | `codex` | Codex 可执行文件路径 |
+| `HAPIR_GEMINI_PATH` | `gemini` | Gemini CLI 可执行文件路径 |
+| `HAPIR_OPENCODE_PATH` | `opencode` | OpenCode 可执行文件路径 |
+| `HAPIR_HTTP_MCP_URL` | — | MCP stdio 桥接的 HTTP 后端地址 |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude 配置目录（MCP、斜杠命令） |
+| `CODEX_HOME` | `~/.codex` | Codex 主目录 |
 
 日志通过 `RUST_LOG` 环境变量控制（默认 `info`）。
 
