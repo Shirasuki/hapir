@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { isBrowser, safeGetItem, safeSetItem, safeRemoveItem } from '@/lib/utils'
 
 export type SendShortcut = 'auto' | 'enter' | 'shift-enter' | 'cmd-enter'
 
@@ -12,37 +13,6 @@ export function getSendShortcutOptions(): ReadonlyArray<{ value: SendShortcut; l
 }
 
 const STORAGE_KEY = 'hapir-send-shortcut'
-
-function isBrowser(): boolean {
-    return typeof window !== 'undefined' && typeof document !== 'undefined'
-}
-
-function safeGetItem(key: string): string | null {
-    if (!isBrowser()) return null
-    try {
-        return localStorage.getItem(key)
-    } catch {
-        return null
-    }
-}
-
-function safeSetItem(key: string, value: string): void {
-    if (!isBrowser()) return
-    try {
-        localStorage.setItem(key, value)
-    } catch {
-        // Ignore storage errors
-    }
-}
-
-function safeRemoveItem(key: string): void {
-    if (!isBrowser()) return
-    try {
-        localStorage.removeItem(key)
-    } catch {
-        // Ignore storage errors
-    }
-}
 
 function parseSendShortcut(raw: string | null): SendShortcut {
     if (raw === 'auto' || raw === 'enter' || raw === 'shift-enter' || raw === 'cmd-enter') {

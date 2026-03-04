@@ -89,6 +89,42 @@
     --app-badge-error-border: rgba(248, 113, 113, 0.35);
 }
 
+/* Claude theme — light (warm cream + copper accent, inspired by claude.ai) */
+[data-color-theme="claude"] {
+    --app-bg: var(--tg-theme-bg-color, #FAF9F7);
+    --app-fg: var(--tg-theme-text-color, #1A1A1A);
+    --app-hint: var(--tg-theme-hint-color, #9B8B7C);
+    --app-link: var(--tg-theme-link-color, #D97757);
+    --app-button: var(--tg-theme-button-color, #D97757);
+    --app-button-text: var(--tg-theme-button-text-color, #ffffff);
+    --app-banner-bg: var(--tg-theme-button-color, #D97757);
+    --app-banner-text: var(--tg-theme-button-text-color, #ffffff);
+    --app-secondary-bg: var(--tg-theme-secondary-bg-color, #F0EDE6);
+    --app-border: rgba(0, 0, 0, 0.08);
+    --app-divider: rgba(0, 0, 0, 0.06);
+    --app-subtle-bg: rgba(0, 0, 0, 0.04);
+    --app-code-bg: #F2EFE9;
+    --app-inline-code-bg: rgba(0, 0, 0, 0.06);
+}
+
+/* Claude theme — dark (warm dark + copper accent) */
+[data-color-theme="claude"][data-theme="dark"] {
+    --app-bg: var(--tg-theme-bg-color, #1A1917);
+    --app-fg: var(--tg-theme-text-color, #EDE9E0);
+    --app-hint: var(--tg-theme-hint-color, #9B9185);
+    --app-link: var(--tg-theme-link-color, #E8946F);
+    --app-button: var(--tg-theme-button-color, #D97757);
+    --app-button-text: var(--tg-theme-button-text-color, #ffffff);
+    --app-banner-bg: var(--tg-theme-button-color, #2D2A25);
+    --app-banner-text: var(--tg-theme-button-text-color, #EDE9E0);
+    --app-secondary-bg: var(--tg-theme-secondary-bg-color, #252220);
+    --app-border: rgba(255, 255, 255, 0.1);
+    --app-divider: rgba(255, 255, 255, 0.08);
+    --app-subtle-bg: rgba(255, 255, 255, 0.05);
+    --app-code-bg: #211F1C;
+    --app-inline-code-bg: rgba(255, 255, 255, 0.1);
+}
+
 html {
     font-size: calc(100% * var(--app-font-scale, 1));
 }

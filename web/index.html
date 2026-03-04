@@ -50,6 +50,18 @@
                 document.documentElement.setAttribute('data-theme', 'dark')
             }
         </script>
+        <script>
+            (function () {
+                try {
+                    var colorTheme = localStorage.getItem('hapir-color-theme')
+                    if (colorTheme === 'claude') {
+                        document.documentElement.setAttribute('data-color-theme', 'claude')
+                    }
+                } catch (error) {
+                    // Ignore storage errors.
+                }
+            })()
+        </script>
 
         <title>HAPIR</title>
     </head>

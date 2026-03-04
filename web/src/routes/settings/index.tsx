@@ -4,6 +4,7 @@ import { useAppGoBack } from '@/hooks/useAppGoBack'
 import { getElevenLabsSupportedLanguages, getLanguageDisplayName, type Language } from '@/lib/languages'
 import { getFontScaleOptions, useFontScale, type FontScale } from '@/hooks/useFontScale'
 import { getSendShortcutOptions, useSendShortcut, type SendShortcut } from '@/hooks/useSendShortcut'
+import { getColorThemeOptions, useColorTheme, type ColorTheme } from '@/hooks/useColorTheme'
 import { PROTOCOL_VERSION } from '@/lib/protocol'
 
 const locales: { value: Locale; nativeLabel: string }[] = [
@@ -75,13 +76,16 @@ export default function SettingsPage() {
     const goBack = useAppGoBack()
     const [isOpen, setIsOpen] = useState(false)
     const [isFontOpen, setIsFontOpen] = useState(false)
+    const [isThemeOpen, setIsThemeOpen] = useState(false)
     const [isSendShortcutOpen, setIsSendShortcutOpen] = useState(false)
     const [isVoiceOpen, setIsVoiceOpen] = useState(false)
     const containerRef = useRef<HTMLDivElement>(null)
     const fontContainerRef = useRef<HTMLDivElement>(null)
+    const themeContainerRef = useRef<HTMLDivElement>(null)
     const sendShortcutContainerRef = useRef<HTMLDivElement>(null)
     const voiceContainerRef = useRef<HTMLDivElement>(null)
     const { fontScale, setFontScale } = useFontScale()
+    const { colorTheme, setColorTheme } = useColorTheme()
     const { sendShortcut, setSendShortcut } = useSendShortcut()
 
     // Voice language state - read from localStorage
@@ -90,9 +94,11 @@ export default function SettingsPage() {
     })
 
     const fontScaleOptions = getFontScaleOptions()
+    const colorThemeOptions = getColorThemeOptions()
     const sendShortcutOptions = getSendShortcutOptions()
     const currentLocale = locales.find((loc) => loc.value === locale)
     const currentFontScaleLabel = fontScaleOptions.find((opt) => opt.value === fontScale)?.label ?? '100%'
+    const currentColorThemeLabel = t(colorThemeOptions.find((opt) => opt.value === colorTheme)?.labelKey ?? 'settings.display.theme.default')
     const currentSendShortcutLabel = t(sendShortcutOptions.find((opt) => opt.value === sendShortcut)?.labelKey ?? 'settings.keyboard.sendShortcut.auto')
     const currentVoiceLanguage = voiceLanguages.find((lang) => lang.code === voiceLanguage)
 
@@ -104,6 +110,11 @@ export default function SettingsPage() {
     const handleFontScaleChange = (newScale: FontScale) => {
         setFontScale(newScale)
         setIsFontOpen(false)
+    }
+
+    const handleColorThemeChange = (newTheme: ColorTheme) => {
+        setColorTheme(newTheme)
+        setIsThemeOpen(false)
     }
 
     const handleSendShortcutChange = (newShortcut: SendShortcut) => {
@@ -123,7 +134,7 @@ export default function SettingsPage() {
 
     // Close dropdown when clicking outside
     useEffect(() => {
-        if (!isOpen && !isFontOpen && !isSendShortcutOpen && !isVoiceOpen) return
+        if (!isOpen && !isFontOpen && !isThemeOpen && !isSendShortcutOpen && !isVoiceOpen) return
 
         const handleClickOutside = (event: MouseEvent) => {
             if (isOpen && containerRef.current && !containerRef.current.contains(event.target as Node)) {
@@ -131,6 +142,9 @@ export default function SettingsPage() {
             }
             if (isFontOpen && fontContainerRef.current && !fontContainerRef.current.contains(event.target as Node)) {
                 setIsFontOpen(false)
+            }
+            if (isThemeOpen && themeContainerRef.current && !themeContainerRef.current.contains(event.target as Node)) {
+                setIsThemeOpen(false)
             }
             if (isSendShortcutOpen && sendShortcutContainerRef.current && !sendShortcutContainerRef.current.contains(event.target as Node)) {
                 setIsSendShortcutOpen(false)
@@ -142,16 +156,17 @@ export default function SettingsPage() {
 
         document.addEventListener('mousedown', handleClickOutside)
         return () => document.removeEventListener('mousedown', handleClickOutside)
-    }, [isOpen, isFontOpen, isSendShortcutOpen, isVoiceOpen])
+    }, [isOpen, isFontOpen, isThemeOpen, isSendShortcutOpen, isVoiceOpen])
 
     // Close on escape key
     useEffect(() => {
-        if (!isOpen && !isFontOpen && !isSendShortcutOpen && !isVoiceOpen) return
+        if (!isOpen && !isFontOpen && !isThemeOpen && !isSendShortcutOpen && !isVoiceOpen) return
 
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 setIsOpen(false)
                 setIsFontOpen(false)
+                setIsThemeOpen(false)
                 setIsSendShortcutOpen(false)
                 setIsVoiceOpen(false)
             }
@@ -159,7 +174,7 @@ export default function SettingsPage() {
 
         document.addEventListener('keydown', handleEscape)
         return () => document.removeEventListener('keydown', handleEscape)
-    }, [isOpen, isFontOpen, isSendShortcutOpen, isVoiceOpen])
+    }, [isOpen, isFontOpen, isThemeOpen, isSendShortcutOpen, isVoiceOpen])
 
     return (
         <div className="flex h-full flex-col">
@@ -275,6 +290,55 @@ export default function SettingsPage() {
                                                 }`}
                                             >
                                                 <span>{opt.label}</span>
+                                                {isSelected && (
+                                                    <span className="ml-2 text-[var(--app-link)]">
+                                                        <CheckIcon />
+                                                    </span>
+                                                )}
+                                            </button>
+                                        )
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
+                        <div ref={themeContainerRef} className="relative">
+                            <button
+                                type="button"
+                                onClick={() => setIsThemeOpen(!isThemeOpen)}
+                                className="flex w-full items-center justify-between px-3 py-3 text-left transition-colors hover:bg-[var(--app-subtle-bg)]"
+                                aria-expanded={isThemeOpen}
+                                aria-haspopup="listbox"
+                            >
+                                <span className="text-[var(--app-fg)]">{t('settings.display.theme')}</span>
+                                <span className="flex items-center gap-1 text-[var(--app-hint)]">
+                                    <span>{currentColorThemeLabel}</span>
+                                    <ChevronDownIcon className={`transition-transform ${isThemeOpen ? 'rotate-180' : ''}`} />
+                                </span>
+                            </button>
+
+                            {isThemeOpen && (
+                                <div
+                                    className="absolute right-3 top-full mt-1 min-w-[140px] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] shadow-lg overflow-hidden z-50"
+                                    role="listbox"
+                                    aria-label={t('settings.display.theme')}
+                                >
+                                    {colorThemeOptions.map((opt) => {
+                                        const isSelected = colorTheme === opt.value
+                                        return (
+                                            <button
+                                                key={opt.value}
+                                                type="button"
+                                                role="option"
+                                                aria-selected={isSelected}
+                                                onClick={() => handleColorThemeChange(opt.value)}
+                                                className={`flex items-center justify-between w-full px-3 py-2 text-base text-left transition-colors ${
+                                                    isSelected
+                                                        ? 'text-[var(--app-link)] bg-[var(--app-subtle-bg)]'
+                                                        : 'text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]'
+                                                }`}
+                                            >
+                                                <span>{t(opt.labelKey)}</span>
                                                 {isSelected && (
                                                     <span className="ml-2 text-[var(--app-link)]">
                                                         <CheckIcon />

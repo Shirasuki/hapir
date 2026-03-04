@@ -5,6 +5,37 @@ export function cn(...inputs: ClassValue[]): string {
     return twMerge(clsx(inputs))
 }
 
+export function isBrowser(): boolean {
+    return typeof window !== 'undefined' && typeof document !== 'undefined'
+}
+
+export function safeGetItem(key: string): string | null {
+    if (!isBrowser()) return null
+    try {
+        return localStorage.getItem(key)
+    } catch {
+        return null
+    }
+}
+
+export function safeSetItem(key: string, value: string): void {
+    if (!isBrowser()) return
+    try {
+        localStorage.setItem(key, value)
+    } catch {
+        // Ignore storage errors
+    }
+}
+
+export function safeRemoveItem(key: string): void {
+    if (!isBrowser()) return
+    try {
+        localStorage.removeItem(key)
+    } catch {
+        // Ignore storage errors
+    }
+}
+
 /**
  * Decode base64 string to UTF-8 text
  */

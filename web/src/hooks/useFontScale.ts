@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { isBrowser, safeGetItem, safeSetItem, safeRemoveItem } from '@/lib/utils'
 
 export type FontScale = 0.8 | 0.9 | 1 | 1.1 | 1.2
 
@@ -12,48 +13,9 @@ export function getFontScaleOptions(): ReadonlyArray<{ value: FontScale; label: 
     ]
 }
 
-function getFontScaleStorageKey(): string {
-    return 'hapir-font-scale'
-}
-
-function isBrowser(): boolean {
-    return typeof window !== 'undefined' && typeof document !== 'undefined'
-}
+const STORAGE_KEY = 'hapir-font-scale'
 
 const useIsomorphicLayoutEffect = isBrowser() ? useLayoutEffect : useEffect
-
-function safeGetItem(key: string): string | null {
-    if (!isBrowser()) {
-        return null
-    }
-    try {
-        return localStorage.getItem(key)
-    } catch {
-        return null
-    }
-}
-
-function safeSetItem(key: string, value: string): void {
-    if (!isBrowser()) {
-        return
-    }
-    try {
-        localStorage.setItem(key, value)
-    } catch {
-        // Ignore storage errors
-    }
-}
-
-function safeRemoveItem(key: string): void {
-    if (!isBrowser()) {
-        return
-    }
-    try {
-        localStorage.removeItem(key)
-    } catch {
-        // Ignore storage errors
-    }
-}
 
 function parseFontScale(raw: string | null): FontScale {
     const value = Number(raw)
@@ -71,7 +33,7 @@ function applyFontScale(scale: FontScale): void {
 }
 
 function getInitialFontScale(): FontScale {
-    return parseFontScale(safeGetItem(getFontScaleStorageKey()))
+    return parseFontScale(safeGetItem(STORAGE_KEY))
 }
 
 export function initializeFontScale(): void {
@@ -91,7 +53,7 @@ export function useFontScale(): { fontScale: FontScale; setFontScale: (scale: Fo
         }
 
         const onStorage = (event: StorageEvent) => {
-            if (event.key !== getFontScaleStorageKey()) {
+            if (event.key !== STORAGE_KEY) {
                 return
             }
             const nextScale = parseFontScale(event.newValue)
@@ -106,9 +68,9 @@ export function useFontScale(): { fontScale: FontScale; setFontScale: (scale: Fo
         setFontScaleState(scale)
 
         if (scale === 1) {
-            safeRemoveItem(getFontScaleStorageKey())
+            safeRemoveItem(STORAGE_KEY)
         } else {
-            safeSetItem(getFontScaleStorageKey(), String(scale))
+            safeSetItem(STORAGE_KEY, String(scale))
         }
     }, [])
 
