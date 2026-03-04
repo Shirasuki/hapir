@@ -141,11 +141,13 @@ impl AcpMessageHandler {
         if self.streaming_message_id.is_none() {
             self.streaming_message_id = Some(uuid::Uuid::new_v4().to_string());
             self.last_sent_text.clear();
+            self.buffered_text.clear();
         }
 
         let message_id = self.streaming_message_id.as_ref().unwrap().clone();
 
-        let delta_text = if text.starts_with(&self.last_sent_text) {
+        let is_cumulative = text.starts_with(&self.last_sent_text);
+        let delta_text = if is_cumulative {
             &text[self.last_sent_text.len()..]
         } else {
             text
@@ -160,17 +162,23 @@ impl AcpMessageHandler {
             self.last_sent_text = text.to_string();
         }
 
-        self.buffered_text = text.to_string();
+        // 累积完整文本：累积格式直接替换，增量格式追加
+        if is_cumulative {
+            self.buffered_text = text.to_string();
+        } else {
+            self.buffered_text.push_str(delta_text);
+        }
     }
 
-    fn finalize_stream(&mut self) {
+    pub fn finalize_stream(&mut self) {
         if let Some(message_id) = self.streaming_message_id.take() {
             (self.on_message)(AgentMessage::TextDelta {
                 message_id,
-                text: self.buffered_text.clone(),
+                text: String::new(),
                 is_final: true,
             });
             self.last_sent_text.clear();
+            // buffered_text 保留，供 flush_text 发送完整消息
         }
     }
 

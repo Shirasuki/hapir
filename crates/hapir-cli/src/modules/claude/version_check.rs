@@ -31,7 +31,6 @@ pub fn check_claude_version() -> Result<()> {
         }
         Err(e) => bail!("无法执行 claude --version: {e}"),
     };
-11111
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let version_output = if stdout.trim().is_empty() { &stderr } else { &stdout };

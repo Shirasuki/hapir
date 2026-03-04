@@ -91,8 +91,8 @@ impl AcpSdkBackend {
         let _ = rx.await;
     }
 
-    fn notify_response_complete(&self) {
-        let mut txs = self.response_complete_txs.blocking_lock();
+    async fn notify_response_complete(&self) {
+        let mut txs = self.response_complete_txs.lock().await;
         for tx in txs.drain(..) {
             let _ = tx.send(());
         }
@@ -451,7 +451,8 @@ impl AgentBackend for AcpSdkBackend {
                 if let Some(_reason) = stop_reason {
                     let mut handler = self.message_handler.lock().await;
                     if let Some(h) = handler.as_mut() {
-                        h.flush_text();
+                        h.flush_text();       // 先发完整消息到 hub 永久存储
+                        h.finalize_stream();  // 再关闭流式 UI
                     }
                     drop(handler);
                 }
@@ -465,7 +466,7 @@ impl AgentBackend for AcpSdkBackend {
             }
             *self.message_handler.lock().await = None;
             *self.is_processing.lock().await = false;
-            self.notify_response_complete();
+            self.notify_response_complete().await;
 
             result.map(|_| ()).map_err(|e| anyhow::anyhow!(e))
         })
