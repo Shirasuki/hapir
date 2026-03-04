@@ -18,8 +18,9 @@ pub async fn gemini_local_launcher(session: &Arc<AgentSessionBase<GeminiMode>>) 
     let working_directory = session.path.clone();
     debug!("[geminiLocalLauncher] Starting in {}", working_directory);
 
-    let mut cmd = tokio::process::Command::new(get_gemini_bin());
-    cmd.current_dir(&working_directory);
+    let (gemini_prog, gemini_prefix) = get_gemini_bin();
+    let mut cmd = tokio::process::Command::new(gemini_prog);
+    cmd.args(&gemini_prefix).current_dir(&working_directory);
 
     match cmd.status().await {
         Ok(status) => {

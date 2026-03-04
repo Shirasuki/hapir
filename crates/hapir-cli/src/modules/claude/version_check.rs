@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use hapir_infra::utils::agent_paths::get_claude_bin;
 use std::io::ErrorKind;
 use std::process::Command;
+use tracing::debug;
 
 const MIN_CLAUDE_VERSION: (u32, u32, u32) = (2, 1, 47);
 
@@ -15,17 +16,27 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
 }
 
 pub fn check_claude_version() -> Result<()> {
-    let output = match Command::new(get_claude_bin()).arg("--version").output() {
+    // Skip version check when HAPIR_CLAUDE_PATH is explicitly set to a custom value.
+    // A custom wrapper may not support --version correctly.
+    if std::env::var("HAPIR_CLAUDE_PATH").is_ok() {
+        debug!("HAPIR_CLAUDE_PATH is set, skipping Claude version check");
+        return Ok(());
+    }
+
+    let (claude_prog, claude_prefix) = get_claude_bin();
+    let output = match Command::new(claude_prog).args(&claude_prefix).arg("--version").output() {
         Ok(o) => o,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             bail!("Claude Code 未安装。请先安装: npm install -g @anthropic-ai/claude-code");
         }
         Err(e) => bail!("无法执行 claude --version: {e}"),
     };
-
+11111
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let version = parse_version(&stdout)
-        .ok_or_else(|| anyhow::anyhow!("无法解析 Claude Code 版本号，输出: {stdout}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let version_output = if stdout.trim().is_empty() { &stderr } else { &stdout };
+    let version = parse_version(version_output)
+        .ok_or_else(|| anyhow::anyhow!("无法解析 Claude Code 版本号，输出: {version_output}"))?;
 
     if version < MIN_CLAUDE_VERSION {
         bail!(

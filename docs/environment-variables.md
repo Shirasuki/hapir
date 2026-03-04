@@ -76,10 +76,10 @@ Variables read by `hapir` subcommands (claude, codex, gemini, opencode, runner, 
 
 | Variable | Default | Description / 说明 |
 |---|---|---|
-| `HAPIR_CLAUDE_PATH` | `claude` | Path to the Claude Code executable. / Claude Code 可执行文件路径。 |
-| `HAPIR_CODEX_PATH` | `codex` | Path to the Codex executable. / Codex 可执行文件路径。 |
-| `HAPIR_GEMINI_PATH` | `gemini` | Path to the Gemini CLI executable. / Gemini CLI 可执行文件路径。 |
-| `HAPIR_OPENCODE_PATH` | `opencode` | Path to the OpenCode executable. / OpenCode 可执行文件路径。 |
+| `HAPIR_CLAUDE_PATH` | `claude` | Claude Code executable. May be a command string with arguments, e.g. `bash /path/to/wrapper.sh`. / Claude Code 可执行文件路径，支持带参数的命令字符串，如 `bash /path/to/wrapper.sh`。 |
+| `HAPIR_CODEX_PATH` | `codex` | Codex executable. Supports command strings. / Codex 可执行文件路径，支持命令字符串。 |
+| `HAPIR_GEMINI_PATH` | `gemini` | Gemini CLI executable. Supports command strings. / Gemini CLI 可执行文件路径，支持命令字符串。 |
+| `HAPIR_OPENCODE_PATH` | `opencode` | OpenCode executable. Supports command strings. / OpenCode 可执行文件路径，支持命令字符串。 |
 
 ### Agent Configuration / Agent 配置
 

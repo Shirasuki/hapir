@@ -46,8 +46,9 @@ pub async fn claude_local_launcher(session: &Arc<ClaudeSession<ClaudeEnhancedMod
         args
     );
 
-    let mut cmd = Command::new(get_claude_bin());
-    cmd.args(&args).current_dir(&working_directory);
+    let (claude_prog, claude_prefix) = get_claude_bin();
+    let mut cmd = Command::new(claude_prog);
+    cmd.args(&claude_prefix).args(&args).current_dir(&working_directory);
 
     if let Some(ref env_vars) = session.claude_env_vars {
         for (key, value) in env_vars {

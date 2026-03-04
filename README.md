@@ -127,10 +127,10 @@ See [docs/environment-variables.md](./docs/environment-variables.md) for the ful
 | `HAPIR_HOME` | `~/.hapir` | Data directory |
 | `HAPIR_EXPERIMENTAL` | `false` | Enable experimental features (`true`/`1`/`yes`) |
 | `HAPIR_HOSTNAME` | system hostname | Override machine hostname reported to hub |
-| `HAPIR_CLAUDE_PATH` | `claude` | Path to Claude Code executable |
-| `HAPIR_CODEX_PATH` | `codex` | Path to Codex executable |
-| `HAPIR_GEMINI_PATH` | `gemini` | Path to Gemini CLI executable |
-| `HAPIR_OPENCODE_PATH` | `opencode` | Path to OpenCode executable |
+| `HAPIR_CLAUDE_PATH` | `claude` | Claude Code executable (supports command strings, e.g. `bash wrapper.sh`) |
+| `HAPIR_CODEX_PATH` | `codex` | Codex executable (supports command strings) |
+| `HAPIR_GEMINI_PATH` | `gemini` | Gemini CLI executable (supports command strings) |
+| `HAPIR_OPENCODE_PATH` | `opencode` | OpenCode executable (supports command strings) |
 | `HAPIR_HTTP_MCP_URL` | — | HTTP backend URL for MCP stdio bridge |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude config directory (MCP, slash commands) |
 | `CODEX_HOME` | `~/.codex` | Codex home directory |

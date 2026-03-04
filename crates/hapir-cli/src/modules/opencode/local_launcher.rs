@@ -18,8 +18,9 @@ pub async fn opencode_local_launcher(session: &Arc<AgentSessionBase<OpencodeMode
     let working_directory = session.path.clone();
     debug!("[opencodeLocalLauncher] Starting in {}", working_directory);
 
-    let mut cmd = tokio::process::Command::new(get_opencode_bin());
-    cmd.current_dir(&working_directory);
+    let (opencode_prog, opencode_prefix) = get_opencode_bin();
+    let mut cmd = tokio::process::Command::new(opencode_prog);
+    cmd.args(&opencode_prefix).current_dir(&working_directory);
 
     let _exit_status = match cmd.status().await {
         Ok(status) => {

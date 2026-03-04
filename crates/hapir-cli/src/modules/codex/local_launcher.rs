@@ -44,7 +44,9 @@ pub async fn codex_local_launcher(session: &Arc<AgentSessionBase<CodexMode>>) ->
         "codexLocalSync",
     );
 
-    let mut cmd = Command::new(get_codex_bin());
+    let (codex_prog, codex_prefix) = get_codex_bin();
+    let mut cmd = Command::new(codex_prog);
+    cmd.args(&codex_prefix);
     if let Some(ref sid) = *session.session_id.lock().await {
         cmd.arg("resume").arg(sid);
     }

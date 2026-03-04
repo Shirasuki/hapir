@@ -219,9 +219,15 @@ fn spawn_stderr_reader(stderr: tokio::process::ChildStderr) {
     });
 }
 
-fn spawn_child(executable: &str, args: &[String], cwd: Option<&str>) -> anyhow::Result<Child> {
+fn spawn_child(
+    executable: &str,
+    prefix_args: &[String],
+    args: &[String],
+    cwd: Option<&str>,
+) -> anyhow::Result<Child> {
     let mut cmd = Command::new(executable);
-    cmd.args(args)
+    cmd.args(prefix_args)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -234,9 +240,10 @@ fn spawn_child(executable: &str, args: &[String], cwd: Option<&str>) -> anyhow::
 /// Spawn a Claude process in --print mode.
 /// Stdin is closed immediately (Claude needs EOF to start processing).
 pub fn query(prompt: &str, options: QueryOptions) -> anyhow::Result<Query> {
-    let executable = options
+    let (executable, prefix_args) = options
         .path_to_executable
         .clone()
+        .map(|p| (p, vec![]))
         .unwrap_or_else(get_claude_bin);
 
     let mut args = build_common_args(&options);
@@ -245,7 +252,7 @@ pub fn query(prompt: &str, options: QueryOptions) -> anyhow::Result<Query> {
 
     debug!("Spawning Claude process: {} {}", executable, args.join(" "));
 
-    let mut child = spawn_child(&executable, &args, options.cwd.as_deref())?;
+    let mut child = spawn_child(&executable, &prefix_args, &args, options.cwd.as_deref())?;
     let stdout = child.stdout.take().expect("child stdout");
 
     if let Some(stderr) = child.stderr.take() {
@@ -273,9 +280,10 @@ pub fn query(prompt: &str, options: QueryOptions) -> anyhow::Result<Query> {
 /// Keeps stdin open for sending user messages and control responses.
 /// The caller must send the initial user message via `send_user_message()`.
 pub fn query_interactive(options: QueryOptions) -> anyhow::Result<InteractiveQuery> {
-    let executable = options
+    let (executable, prefix_args) = options
         .path_to_executable
         .clone()
+        .map(|p| (p, vec![]))
         .unwrap_or_else(get_claude_bin);
 
     let mut args = build_common_args(&options);
@@ -290,7 +298,7 @@ pub fn query_interactive(options: QueryOptions) -> anyhow::Result<InteractiveQue
         args.join(" ")
     );
 
-    let mut child = spawn_child(&executable, &args, options.cwd.as_deref())?;
+    let mut child = spawn_child(&executable, &prefix_args, &args, options.cwd.as_deref())?;
     let stdout = child.stdout.take().expect("child stdout");
     let stdin = child.stdin.take().expect("child stdin");
 

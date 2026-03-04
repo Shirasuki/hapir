@@ -127,10 +127,10 @@ hapir doctor       # 显示诊断信息
 | `HAPIR_HOME` | `~/.hapir` | 数据目录 |
 | `HAPIR_EXPERIMENTAL` | `false` | 启用实验性功能（`true`/`1`/`yes`） |
 | `HAPIR_HOSTNAME` | 系统主机名 | 覆盖上报给 hub 的机器主机名 |
-| `HAPIR_CLAUDE_PATH` | `claude` | Claude Code 可执行文件路径 |
-| `HAPIR_CODEX_PATH` | `codex` | Codex 可执行文件路径 |
-| `HAPIR_GEMINI_PATH` | `gemini` | Gemini CLI 可执行文件路径 |
-| `HAPIR_OPENCODE_PATH` | `opencode` | OpenCode 可执行文件路径 |
+| `HAPIR_CLAUDE_PATH` | `claude` | Claude Code 可执行文件路径，支持命令字符串（如 `bash wrapper.sh`） |
+| `HAPIR_CODEX_PATH` | `codex` | Codex 可执行文件路径，支持命令字符串 |
+| `HAPIR_GEMINI_PATH` | `gemini` | Gemini CLI 可执行文件路径，支持命令字符串 |
+| `HAPIR_OPENCODE_PATH` | `opencode` | OpenCode 可执行文件路径，支持命令字符串 |
 | `HAPIR_HTTP_MCP_URL` | — | MCP stdio 桥接的 HTTP 后端地址 |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude 配置目录（MCP、斜杠命令） |
 | `CODEX_HOME` | `~/.codex` | Codex 主目录 |
