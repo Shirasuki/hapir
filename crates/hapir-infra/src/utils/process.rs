@@ -1,7 +1,7 @@
 /// Re-export from persistence for convenience.
 pub use crate::persistence::is_process_alive;
 use anyhow::{Context, Result};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use procfs::process::Process as ProcfsProcess;
 #[cfg(unix)]
 use std::collections::HashSet;
@@ -82,7 +82,7 @@ async fn wait_for_process_to_die(pid: u32, force: bool) {
 
 /// Recursively collect all descendant PIDs of a process (depth-first).
 /// Returns PIDs in child-first order (leaves first, root last).
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn collect_process_tree(pid: u32) -> Vec<u32> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
@@ -98,6 +98,35 @@ fn collect_process_tree(pid: u32) -> Vec<u32> {
         {
             for child_pid in children {
                 stack.push(child_pid);
+            }
+        }
+    }
+    result.reverse();
+    result
+}
+
+/// Recursively collect all descendant PIDs of a process using `pgrep`.
+/// Returns PIDs in child-first order (leaves first, root last).
+#[cfg(all(unix, not(target_os = "linux")))]
+fn collect_process_tree(pid: u32) -> Vec<u32> {
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![pid];
+    while let Some(p) = stack.pop() {
+        if !seen.insert(p) {
+            continue;
+        }
+        result.push(p);
+        if let Ok(output) = std::process::Command::new("pgrep")
+            .args(["-P", &p.to_string()])
+            .output()
+        {
+            if let Ok(stdout) = std::str::from_utf8(&output.stdout) {
+                for line in stdout.lines() {
+                    if let Ok(child_pid) = line.trim().parse::<u32>() {
+                        stack.push(child_pid);
+                    }
+                }
             }
         }
     }
